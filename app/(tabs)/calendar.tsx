@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import dayjs from 'dayjs';
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   StyleSheet,
   Text,
@@ -9,7 +9,6 @@ import {
   Dimensions,
   ActivityIndicator,
   Alert,
-  ScrollView,
   Modal,
 } from 'react-native';
 import { Calendar } from 'react-native-big-calendar';
@@ -69,28 +68,32 @@ interface CourseEvent {
   color: { primary: string; light: string; dark: string };
 }
 
-function courseToEvents(course: Course): CourseEvent[] {
+function courseToEvents(course: Course, viewStart: Date, viewEnd: Date): CourseEvent[] {
   const events: CourseEvent[] = [];
   const color = getCourseColor(course.code);
   const schedules = parseTimeString(course.time);
-  
+
   if (schedules.length === 0) return events;
 
-  const semesterStart = dayjs('2026-01-01'); 
-  const semesterEnd = dayjs('2026-05-31');   
+  const semesterStart = dayjs('2026-01-01');
+  const semesterEnd = dayjs('2026-05-31');
+
+  // Only generate events for the visible range (with buffer)
+  const rangeStart = dayjs(viewStart).isBefore(semesterStart) ? semesterStart : dayjs(viewStart);
+  const rangeEnd = dayjs(viewEnd).isAfter(semesterEnd) ? semesterEnd : dayjs(viewEnd);
 
   for (const schedule of schedules) {
     for (const dayStr of schedule.days) {
       const dayNum = DAY_MAP[dayStr];
       if (dayNum === undefined) continue;
 
-      let currentWeekDate = semesterStart.startOf('week').add(dayNum, 'day');
-      
-      if (currentWeekDate.isBefore(semesterStart)) {
+      let currentWeekDate = rangeStart.startOf('week').add(dayNum, 'day');
+
+      if (currentWeekDate.isBefore(rangeStart)) {
         currentWeekDate = currentWeekDate.add(1, 'week');
       }
 
-      while (currentWeekDate.isBefore(semesterEnd) || currentWeekDate.isSame(semesterEnd, 'day')) {
+      while (currentWeekDate.isBefore(rangeEnd) || currentWeekDate.isSame(rangeEnd, 'day')) {
         const startMatch = schedule.startTime.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
         const endMatch = schedule.endTime.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
 
@@ -134,7 +137,6 @@ export default function CalendarScreen() {
   const { user } = useAuth();
   const [mode, setMode] = useState<CalendarMode>('week');
   const [date, setDate] = useState(new Date());
-  const [events, setEvents] = useState<CourseEvent[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showMenu, setShowMenu] = useState(false);
@@ -168,14 +170,6 @@ export default function CalendarScreen() {
     try {
       const fetchedCourses = await getCourses(user.$id);
       setCourses(fetchedCourses);
-      
-      const allEvents: CourseEvent[] = [];
-      for (const course of fetchedCourses) {
-        const courseEvents = courseToEvents(course);
-        allEvents.push(...courseEvents);
-      }
-
-      setEvents(allEvents);
     } catch (error) {
       console.error(error);
       Alert.alert('Error', 'Failed to load courses');
@@ -246,11 +240,52 @@ export default function CalendarScreen() {
     setDate(dayjs(date).add(1, unit).toDate());
   };
 
-  const handleToday = () => setDate(new Date());
+  const handleDateTitlePress = () => setDate(new Date());
 
-  const handleEventPress = (event: any) => {
+  const handleEventPress = useCallback((event: any) => {
     setSelectedEvent(event as CourseEvent);
-  };
+  }, []);
+
+  // Calculate visible date range based on current mode
+  const dateRange = useMemo(() => {
+    const currentDate = dayjs(date);
+    let start: Date, end: Date;
+
+    if (mode === 'month') {
+      start = currentDate.startOf('month').subtract(7, 'days').toDate();
+      end = currentDate.endOf('month').add(7, 'days').toDate();
+    } else if (mode === 'week') {
+      start = currentDate.startOf('week').subtract(7, 'days').toDate();
+      end = currentDate.endOf('week').add(7, 'days').toDate();
+    } else {
+      start = currentDate.subtract(1, 'day').toDate();
+      end = currentDate.add(1, 'day').toDate();
+    }
+
+    return { start, end };
+  }, [date, mode]);
+
+  // Memoize events generation - only recalculate when courses or date range changes
+  const events = useMemo(() => {
+    const allEvents: CourseEvent[] = [];
+    for (const course of courses) {
+      const courseEvents = courseToEvents(course, dateRange.start, dateRange.end);
+      allEvents.push(...courseEvents);
+    }
+    return allEvents;
+  }, [courses, dateRange]);
+
+  // Memoize event cell style function
+  const eventCellStyle = useCallback((event: any) => {
+    const courseEvent = event as CourseEvent;
+    return {
+      backgroundColor: courseEvent.color.primary,
+      borderRadius: 8,
+      borderLeftWidth: 4,
+      borderLeftColor: courseEvent.color.dark,
+      padding: 4,
+    };
+  }, []);
 
   if (isLoading) {
     return (
@@ -270,33 +305,26 @@ export default function CalendarScreen() {
       {/* HEADER */}
       <View style={[styles.header, { height: HEADER_HEIGHT }]}>
         <View style={styles.headerContent}>
-          <View style={styles.navControls}>
-            <TouchableOpacity onPress={handlePrev} style={styles.navBtn}>
-              <Ionicons name="chevron-back" size={22} color={Colors.title} />
-            </TouchableOpacity>
+          <TouchableOpacity onPress={handlePrev} style={styles.navBtn}>
+            <Ionicons name="chevron-back" size={24} color={Colors.title} />
+          </TouchableOpacity>
 
+          <TouchableOpacity onPress={handleDateTitlePress} activeOpacity={0.7} style={{ flex: 1 }}>
             <Text style={styles.dateTitle}>
               {dayjs(date).format('MMMM YYYY')}
             </Text>
+          </TouchableOpacity>
 
-            <TouchableOpacity onPress={handleNext} style={styles.navBtn}>
-              <Ionicons name="chevron-forward" size={22} color={Colors.title} />
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity onPress={handleNext} style={styles.navBtn}>
+            <Ionicons name="chevron-forward" size={24} color={Colors.title} />
+          </TouchableOpacity>
 
-          <View style={styles.rightControls}>
-            <TouchableOpacity style={styles.todayBtn} onPress={handleToday}>
-              <Ionicons name="today-outline" size={16} color={Colors.secondary} />
-              <Text style={styles.todayText}>Today</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.menuBtn} 
-              onPress={() => setShowMenu(true)}
-            >
-              <Ionicons name="ellipsis-vertical" size={20} color={Colors.title} />
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity
+            style={styles.menuBtn}
+            onPress={() => setShowMenu(true)}
+          >
+            <Ionicons name="ellipsis-horizontal" size={22} color={Colors.title} />
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -334,16 +362,7 @@ export default function CalendarScreen() {
             onSwipeEnd={(d) => setDate(d as Date)}
             swipeEnabled={true}
             onPressEvent={handleEventPress}
-            eventCellStyle={(event) => {
-              const courseEvent = event as CourseEvent;
-              return {
-                backgroundColor: courseEvent.color.primary,
-                borderRadius: 8,
-                borderLeftWidth: 4,
-                borderLeftColor: courseEvent.color.dark,
-                padding: 4,
-              };
-            }}
+            eventCellStyle={eventCellStyle}
           />
         )}
       </View>
@@ -543,68 +562,32 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(111, 170, 170, 0.15)',
     justifyContent: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
   },
-  headerContent: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    justifyContent: 'space-between',
-    width: '100%',
-  },
-  navControls: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    gap: 4,
-    flex: 1,
-  },
-  rightControls: {
+  headerContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'space-between',
+    gap: 12,
   },
-  navBtn: { 
-    width: 36, 
-    height: 36, 
-    borderRadius: 18, 
-    alignItems: 'center', 
-    justifyContent: 'center', 
-    backgroundColor: Colors.uiBackground, 
-    borderWidth: 1, 
-    borderColor: 'rgba(111, 170, 170, 0.2)' 
-  },
-  dateTitle: { 
-    fontSize: 17, 
-    fontWeight: '700', 
-    color: Colors.title, 
-    minWidth: 120,
-    textAlign: 'center',
-    marginHorizontal: 4,
-  },
-  todayBtn: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    gap: 4,
-    backgroundColor: Colors.uiBackground, 
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 18,
-    borderWidth: 1.5, 
-    borderColor: Colors.secondary 
-  },
-  todayText: { 
-    color: Colors.secondary, 
-    fontWeight: '600', 
-    fontSize: 13,
-  },
-  menuBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  navBtn: {
+    width: 40,
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.uiBackground,
-    borderWidth: 1,
-    borderColor: 'rgba(111, 170, 170, 0.2)',
+  },
+  dateTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.title,
+    textAlign: 'center',
+    letterSpacing: 0.3,
+  },
+  menuBtn: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   modeContainer: { justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.navBackground, borderBottomWidth: 1, borderBottomColor: 'rgba(111, 170, 170, 0.15)', paddingHorizontal: 20 },
   modeSwitcher: { flexDirection: 'row', backgroundColor: Colors.uiBackground, borderRadius: 24, padding: 3, gap: 4, borderWidth: 1, borderColor: 'rgba(111, 170, 170, 0.2)' },

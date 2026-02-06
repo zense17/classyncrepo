@@ -1,10 +1,10 @@
 {
   "expo": {
-    "name": "classync1",
+    "name": "ClasSync",
     "slug": "classync1",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/classynclogo.png",
+    "icon": "./assets/images/classync.png",
     "scheme": "classync1",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -14,24 +14,24 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/classynclogo.png",
-        "backgroundImage": "./assets/images/classynclogo.png",
-        "monochromeImage": "./assets/images/classynclogo.png"
+        "foregroundImage": "./assets/images/classync-adaptive-icon.png",
+        "backgroundImage": "./assets/images/classync-adaptive-icon.png",
+        "monochromeImage": "./assets/images/classync-adaptive-icon.png"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.zense17.classync1",
+      "package": "com.zense17.classync1"
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/classynclogo.png"
+      "favicon": "./assets/images/classync.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/classynclogo.png",
+          "image": "./assets/images/classync-splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff",
@@ -39,7 +39,8 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true,

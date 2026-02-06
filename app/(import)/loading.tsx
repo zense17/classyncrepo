@@ -73,7 +73,6 @@ export default function LoadingScreen() {
         <Text style={styles.title}>Scanning Document</Text>
         <Text style={styles.subtitle}>{status}</Text>
 
-        {/* ✅ FIXED: Replaced <div> with <View> */}
         <View style={styles.stepsContainer}>
           <StepItem label="Document detected" active={steps.detected} />
           <StepItem label="Text recognition" active={steps.recognized} />
@@ -82,6 +81,156 @@ export default function LoadingScreen() {
       </View>
     </SafeAreaView>
   );
+}
+
+// ============================================================================
+// BU BSCS CURRICULUM DATABASE
+// Used for looking up correct subject names when OCR extraction fails
+// ============================================================================
+
+const BU_BSCS_CURRICULUM: Record<string, { title: string; units: number }> = {
+  // FIRST YEAR - First Semester
+  "CS 101": { title: "Introduction to Computing", units: 3 },
+  "CS 102": { title: "Computer Programming 1 (Fundamentals of Programming)", units: 3 },
+  "MATH 101": { title: "Mathematics 1", units: 3 },
+  "PHYS 1": { title: "Physics for Computing", units: 5 },
+  "GEC 11": { title: "Mathematics in the Modern World", units: 3 },
+  "PATHFIT 1": { title: "Movement Competency Training", units: 2 },
+  "NSTP 11": { title: "LTS/CWTS/ROTC", units: 3 },
+
+  // FIRST YEAR - Second Semester
+  "CS 103": { title: "Computer Programming 2 (Intermediate Programming)", units: 3 },
+  "CS 207": { title: "Digital System Design", units: 2 },
+  "MATH 102": { title: "Mathematical Analysis 2", units: 5 },
+  "GEC 12": { title: "Readings in the Philippine History", units: 3 },
+  "GEC 33": { title: "The Contemporary World", units: 3 },
+  "PATHFIT 2": { title: "Exercise-based Fitness Activities", units: 2 },
+  "NSTP 12": { title: "LTS/CWTS/ROTC", units: 3 },
+
+  // SECOND YEAR - First Semester
+  "CS 104": { title: "Data Structure and Algorithm", units: 3 },
+  "CS 106": { title: "Application Development and Emerging Technologies", units: 3 },
+  "CS 108": { title: "Object-oriented Programming", units: 3 },
+  "CS 109": { title: "Discrete Structures 1", units: 3 },
+  "MATH ELEC 101": { title: "Linear Algebra", units: 3 },
+  "GEC 14": { title: "Art Appreciation", units: 3 },
+  "PATHFIT 3": { title: "Menu of Dance, Sports, Martial Arts, Group Exercises", units: 2 },
+
+  // SECOND YEAR - Second Semester
+  "CS 105": { title: "Information Management", units: 3 },
+  "CS 110": { title: "Discrete Structures 2", units: 3 },
+  "CS 111": { title: "Design and Analysis of Algorithms", units: 3 },
+  "CS 112": { title: "Programming Languages", units: 3 },
+  "CS 113": { title: "Special Topics in Computing", units: 3 },
+  "MATH ELEC 102": { title: "Differential Equations", units: 3 },
+  "GEC 15": { title: "Purposive Communication", units: 3 },
+  "PATHFIT 4": { title: "Menu of Dance, Sports, Martial Arts, Group Exercises and Outdoor Adventure Activities", units: 2 },
+
+  // THIRD YEAR - First Semester
+  "CS 114": { title: "Operating Systems", units: 3 },
+  "CS 115": { title: "Computer Architecture and Organization", units: 3 },
+  "CS 116": { title: "Automata Theory and Formal Languages", units: 3 },
+  "CS 117": { title: "Software Engineering 1", units: 3 },
+  "CS ELEC 1": { title: "CS Elective 1", units: 3 },
+  "GEC 16": { title: "Art Appreciation/Pagpapahalaga sa Sining", units: 3 },
+
+  // THIRD YEAR - Second Semester
+  "CS 118": { title: "Software Engineering 2", units: 3 },
+  "CS 119": { title: "Networks and Communication", units: 3 },
+  "CS 120": { title: "Human Computer Interaction", units: 3 },
+  "CS 121": { title: "Information Assurance and Security", units: 3 },
+  "CS ELEC 2": { title: "CS Elective 2", units: 3 },
+  "GEC 17": { title: "Science, Technology and Society/Agham, Teknolohiya at Lipunan", units: 3 },
+  "GEC 18": { title: "Ethics", units: 3 },
+
+  // THIRD YEAR - Summer
+  "CS 122": { title: "Practicum (240 hours)", units: 3 },
+
+  // FOURTH YEAR - First Semester
+  "CS 123": { title: "Numerical Analysis", units: 3 },
+  "CS 124": { title: "CS Thesis 1", units: 3 },
+  "CS ELEC 3": { title: "CS Elective 3", units: 3 },
+  "GEC 20": { title: "The Entrepreneurial Mind", units: 3 },
+  "GEC ELEC 22": { title: "Environmental Science", units: 3 },
+
+  // FOURTH YEAR - Second Semester
+  "CS 125": { title: "CS Thesis 2", units: 3 },
+  "CS 126": { title: "Social Issues and Professional Practice", units: 3 },
+  "GEC 19": { title: "Life and Works of Rizal", units: 3 },
+  "GEC ELEC 21": { title: "GEC Elective 21", units: 3 },
+  "GEC ELEC 21.4": { title: "Living in the IT Era", units: 3 },
+  "GEC ELEC 21.3": { title: "Human Reproduction", units: 3 },
+
+  // Alternative code formats (for OCR variations)
+  "GEC ELECT 21.3": { title: "Human Reproduction", units: 3 },
+  "GEC ELECT 21.4": { title: "Living in the IT Era", units: 3 },
+  "GEC ELEC 213": { title: "Human Reproduction", units: 3 },
+  "GEC ELEC 214": { title: "Living in the IT Era", units: 3 },
+
+  // Professional Electives
+  "CS ELEC 21": { title: "Distributed Systems", units: 3 },
+  "CS ELEC 22": { title: "Mobile Computing", units: 3 },
+
+  // Math courses
+  "MATH 1": { title: "College Algebra", units: 3 },
+  "MATH 2": { title: "Plane Trigonometry", units: 3 },
+};
+
+// List of garbage strings that should never be used as subjects
+const GARBAGE_SUBJECTS = [
+  "official receipt",
+  "receipt",
+  "payment",
+  "validation",
+  "certificate",
+  "registrar",
+  "signature",
+  "printed by",
+  "keep this",
+  "total",
+  "assessed",
+  "fee",
+  "balance",
+  "unit",
+  "credit",
+  "bscs",
+  "college",
+];
+
+// Helper function to check if a subject looks like garbage
+function isGarbageSubject(subject: string): boolean {
+  if (!subject || subject.length < 4) return true;
+  const lower = subject.toLowerCase();
+  return GARBAGE_SUBJECTS.some(garbage => lower.includes(garbage));
+}
+
+// Helper function to look up subject from curriculum
+function getSubjectFromCurriculum(code: string): string | null {
+  const normalizedCode = code.toUpperCase().replace(/\s+/g, " ").trim();
+  
+  if (BU_BSCS_CURRICULUM[normalizedCode]) {
+    return BU_BSCS_CURRICULUM[normalizedCode].title;
+  }
+  
+  const noSpaceCode = normalizedCode.replace(/\s+/g, "");
+  for (const [key, value] of Object.entries(BU_BSCS_CURRICULUM)) {
+    if (key.replace(/\s+/g, "") === noSpaceCode) {
+      return value.title;
+    }
+  }
+  
+  return null;
+}
+
+// Helper function to get units from curriculum
+function getUnitsFromCurriculum(code: string): number {
+  const normalizedCode = code.toUpperCase().replace(/\s+/g, " ").trim();
+  
+  if (BU_BSCS_CURRICULUM[normalizedCode]) {
+    return BU_BSCS_CURRICULUM[normalizedCode].units;
+  }
+  
+  return 3;
 }
 
 // --- PARSER DESIGNED FOR NON-TABULAR OCR OUTPUT ---
@@ -110,8 +259,15 @@ function parseCOR(text: string) {
     /^(CS\s+\d{3})\b/i,
     /^(CS\s+Elec\s*\d+)\b/i,
     /^(GEC\s+\d{1,3})\b/i,
+    /^(GEC\s+Ele[c]?t?\s*\d+\.?\d*)\b/i,
+    /^(GEG\s+Ele[c]?t?\s*\d+\.?\d*)\b/i,
     /^(Math\s+Ed\s+\d+)\b/i,
+    /^(Math\s+Elec\s+\d+)\b/i,
+    /^(MATH\s+\d{1,3})\b/i,
     /^(PATHFit\s*\d+)\b/i,
+    /^(PATHFIT\s*\d+)\b/i,
+    /^(NSTP\s*\d+)\b/i,
+    /^(PHYS\s*\d+)\b/i,
   ];
 
   let scheduleIndex = lines.findIndex((l) => /^SCHEDULE$/i.test(l));
@@ -124,7 +280,9 @@ function parseCOR(text: string) {
     for (const pattern of codePatterns) {
       const match = line.match(pattern);
       if (match) {
-        const code = match[1].replace(/\s+/g, " ").trim().toUpperCase();
+        let code = match[1].replace(/\s+/g, " ").trim().toUpperCase();
+        code = code.replace(/^GEG/, "GEC");
+        code = code.replace(/ELECT/, "ELEC");
         if (!courseCodes.includes(code)) courseCodes.push(code);
         break;
       }
@@ -154,7 +312,24 @@ function parseCOR(text: string) {
     }
   }
 
-  courseCodes.forEach((code, i) => courseMap.set(code, subjects[i] || "Course Title"));
+  // Map codes to subjects - ALWAYS USE CURRICULUM FOR KNOWN CODES
+  courseCodes.forEach((code, i) => {
+    // First, try to get from curriculum (most reliable)
+    const curriculumSubject = getSubjectFromCurriculum(code);
+    
+    if (curriculumSubject) {
+      // Always use curriculum for known courses
+      courseMap.set(code, curriculumSubject);
+      console.log(`Using curriculum for ${code}: ${curriculumSubject}`);
+    } else {
+      // Fallback to OCR extraction, but validate it
+      let subject = subjects[i];
+      if (!subject || isGarbageSubject(subject)) {
+        subject = "Course Title";
+      }
+      courseMap.set(code, subject);
+    }
+  });
 
   // Extract schedule data
   let endIndex = lines.findIndex(
@@ -178,8 +353,12 @@ function parseCOR(text: string) {
     const timeMatch = line.match(/^(\d{1,2}:\d{2}\s*(?:AM|PM))[-–\s]+(\d{1,2}:\d{2}\s*(?:AM|PM))$/i);
     if (timeMatch) times.push(line);
 
-    const roomMatch = line.match(/^(GYM\s*\d+|ECB\s*\d+|IMO|CL\s*\d+|CLS?|Rm\s*\d+)$/i);
-    if (roomMatch) rooms.push(line);
+    const roomMatch = line.match(/^(GYM\s*\d+|ECB\s*\d+|IMO|CL\s*\d+|CLS?|Rm\s*\d+|L\d+|[CG]SD\s*\d+|CSO\s*\d+|AVR\s*\d*)$/i);
+    if (roomMatch) {
+      let room = line.toUpperCase();
+      room = room.replace(/GSD/, "CSD").replace(/CSO/, "CSD");
+      rooms.push(room);
+    }
 
     const facultyMatch = line.match(/^(\d?\s*[A-Z][A-Za-z]+(?:[-\s][A-Z][a-z]+)?)[,\s]+([A-Z]\.?\s*[A-Z]?)$/i);
     if (facultyMatch) faculty.push(`${facultyMatch[1].trim()}, ${facultyMatch[2].trim()}`);
@@ -187,80 +366,30 @@ function parseCOR(text: string) {
 
   console.log("Extracted - Units:", units, "Days:", days, "Times:", times, "Rooms:", rooms, "Faculty:", faculty);
 
-  // FIX MISSING DAYS
-  // If we have more times/rooms/faculty than days, we need to reconstruct missing days
-  const expectedDays = Math.max(times.length, rooms.length, faculty.length);
-  
-  if (days.length < expectedDays) {
-    console.log(`Missing days detected: have ${days.length}, need ${expectedDays}`);
-    
-    // Pattern 1: If we have courseCodes.length schedules but only courseCodes.length-1 days
-    // and we have CS 104 (first course), insert W after T
-    if (courseCodes.length === 4 && days.length === 4 && times.length >= 5 && days[0] === "T" && days[1] === "Sat") {
-      console.log("Pattern: CS 104 with T,W detected - inserting 'W' after 'T'");
+  // FIX MISSING DAY DETECTION
+  if (courseCodes.length === 4 && times.length >= 5 && days.length === 4) {
+    if (days[0] === "T" && days[1] === "Sat") {
+      console.log("Detected missing 'W' - inserting after 'T'");
       days.splice(1, 0, "W");
-    }
-    // Pattern 2: If we have duplicate days and more rooms/times, insert missing days
-    else if (days.length < expectedDays) {
-      // Check for common missing days
-      const commonDays = ["M", "T", "W", "Th", "F", "Sat", "Sun"];
-      const missingCount = expectedDays - days.length;
-      
-      console.log(`Need to insert ${missingCount} day(s)`);
-      
-      // Heuristic: Look for duplicate consecutive days and insert between them
-      for (let i = 0; i < days.length - 1 && days.length < expectedDays; i++) {
-        if (days[i] === days[i + 1]) {
-          // Found duplicate, likely missing a day between them
-          // If both are "Th", likely missing "F" in between
-          if (days[i] === "Th" && !days.includes("F")) {
-            console.log("Inserting 'F' between duplicate 'Th's");
-            days.splice(i + 1, 0, "F");
-          }
-          // If both are same and we need more days, insert common progression
-          else {
-            // Default to next logical day
-            const currentDayIdx = commonDays.indexOf(days[i]);
-            if (currentDayIdx >= 0 && currentDayIdx < commonDays.length - 1) {
-              const nextDay = commonDays[currentDayIdx + 1];
-              console.log(`Inserting '${nextDay}' between duplicate '${days[i]}'s`);
-              days.splice(i + 1, 0, nextDay);
-            }
-          }
-        }
-      }
-      
-      // If still missing days, append reasonable defaults to the end
-      while (days.length < expectedDays) {
-        const lastDay = days[days.length - 1];
-        const lastIdx = commonDays.indexOf(lastDay);
-        if (lastIdx >= 0 && lastIdx < commonDays.length - 1) {
-          days.push(commonDays[lastIdx + 1]);
-          console.log(`Appending '${commonDays[lastIdx + 1]}' to end`);
-        } else {
-          days.push("TBA");
-          console.log("Appending 'TBA' to end");
-        }
-      }
     }
   }
 
   console.log("Adjusted Days:", days);
   console.log(`Times: ${times.length}, Days: ${days.length}, Rooms: ${rooms.length}, Faculty: ${faculty.length}`);
 
-  // Build courses with proper schedule matching
+  // Now match schedules to courses
   const courses: any[] = [];
   let dayIdx = 0, timeIdx = 0, roomIdx = 0, facultyIdx = 0;
 
   for (let i = 0; i < courseCodes.length; i++) {
     const code = courseCodes[i];
-    const title = courseMap.get(code) || "Course Title";
+    const title = courseMap.get(code) || getSubjectFromCurriculum(code) || "Course Title";
     
     // Determine number of schedules for this course
     let numSchedules = 1;
     
-    // Special case: CS 104 with T gets 2 schedules
-    if (i === 0 && days[dayIdx] === "T" && days.length > courseCodes.length) {
+    // CS 104 gets 2 schedules if it starts with T
+    if (i === 0 && days[dayIdx] === "T") {
       numSchedules = 2;
     }
 
@@ -284,10 +413,12 @@ function parseCOR(text: string) {
 
     const roomString = [...new Set(schedules.map(s => s.room).filter(r => r !== "TBA"))].join(" / ");
 
+    const courseUnits = units[i] || getUnitsFromCurriculum(code);
+
     courses.push({
       code,
       title,
-      units: units[i] || 3,
+      units: courseUnits,
       time: timeString || "TBA",
       schedules: schedules.length > 0 ? schedules : [{ days: "TBA", time: "TBA", room: "TBA" }],
       room: roomString || "TBA",
@@ -366,5 +497,3 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
 });
-
-

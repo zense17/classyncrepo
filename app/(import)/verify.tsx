@@ -2,23 +2,143 @@ import { useAuth } from "@/lib/auth-context";
 import { addCourses } from "@/lib/database";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   ActivityIndicator,
-  Alert,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
+  Modal,
+  Animated,
+  Dimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import SuccessModal from "@/components/SuccessModal"; // Adjust path as needed
+import SuccessModal from "@/components/SuccessModal";
+import { Colors } from "@/constants/colors";
+
+const { width } = Dimensions.get("window");
 
 const normalize = (value?: string, fallback = "TBA") => {
   if (!value) return fallback;
   if (typeof value !== "string") return fallback;
   return value.trim().length > 0 ? value : fallback;
+};
+
+// Custom Alert Modal Component
+interface CustomAlertProps {
+  visible: boolean;
+  type: "warning" | "error" | "info";
+  title: string;
+  message: string;
+  buttons: Array<{
+    text: string;
+    style?: "default" | "cancel" | "destructive";
+    onPress?: () => void;
+  }>;
+  onClose: () => void;
+}
+
+const CustomAlert = ({ visible, type, title, message, buttons, onClose }: CustomAlertProps) => {
+  const scaleAnim = useRef(new Animated.Value(0)).current;
+  const opacityAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.spring(scaleAnim, {
+          toValue: 1,
+          useNativeDriver: true,
+          tension: 100,
+          friction: 8,
+        }),
+        Animated.timing(opacityAnim, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(scaleAnim, {
+          toValue: 0,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacityAnim, {
+          toValue: 0,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [visible]);
+
+  const getIconConfig = () => {
+    switch (type) {
+      case "warning":
+        return { name: "warning", color: "#F59E0B", bgColor: "#FEF3C7" };
+      case "error":
+        return { name: "close-circle", color: "#EF4444", bgColor: "#FEE2E2" };
+      case "info":
+        return { name: "information-circle", color: "#3B82F6", bgColor: "#DBEAFE" };
+      default:
+        return { name: "information-circle", color: "#3B82F6", bgColor: "#DBEAFE" };
+    }
+  };
+
+  const iconConfig = getIconConfig();
+
+  const getButtonStyle = (style?: string) => {
+    switch (style) {
+      case "cancel":
+        return { bg: "#F3F4F6", text: "#4B5563" };
+      case "destructive":
+        return { bg: "#FEE2E2", text: "#DC2626" };
+      default:
+        return { bg: "#20C997", text: "#FFFFFF" };
+    }
+  };
+
+  return (
+    <Modal transparent visible={visible} animationType="none" onRequestClose={onClose}>
+      <Animated.View style={[styles.alertOverlay, { opacity: opacityAnim }]}>
+        <Animated.View style={[styles.alertContainer, { transform: [{ scale: scaleAnim }] }]}>
+          <View style={[styles.alertIconContainer, { backgroundColor: iconConfig.bgColor }]}>
+            <Ionicons name={iconConfig.name as any} size={32} color={iconConfig.color} />
+          </View>
+          
+          <Text style={styles.alertTitle}>{title}</Text>
+          <Text style={styles.alertMessage}>{message}</Text>
+          
+          <View style={styles.alertButtonsContainer}>
+            {buttons.map((button, index) => {
+              const btnStyle = getButtonStyle(button.style);
+              return (
+                <TouchableOpacity
+                  key={index}
+                  style={[
+                    styles.alertButton,
+                    { backgroundColor: btnStyle.bg },
+                    buttons.length === 1 && { flex: 1 },
+                  ]}
+                  onPress={() => {
+                    onClose();
+                    button.onPress?.();
+                  }}
+                >
+                  <Text style={[styles.alertButtonText, { color: btnStyle.text }]}>
+                    {button.text}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </Animated.View>
+      </Animated.View>
+    </Modal>
+  );
 };
 
 export default function VerifySchedule() {
@@ -27,7 +147,44 @@ export default function VerifySchedule() {
   const { user } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  
+  // Custom alert state
+  const [alertConfig, setAlertConfig] = useState<{
+    visible: boolean;
+    type: "warning" | "error" | "info";
+    title: string;
+    message: string;
+    buttons: Array<{
+      text: string;
+      style?: "default" | "cancel" | "destructive";
+      onPress?: () => void;
+    }>;
+  }>({
+    visible: false,
+    type: "info",
+    title: "",
+    message: "",
+    buttons: [],
+  });
 
+  const showAlert = (
+    type: "warning" | "error" | "info",
+    title: string,
+    message: string,
+    buttons: Array<{
+      text: string;
+      style?: "default" | "cancel" | "destructive";
+      onPress?: () => void;
+    }>
+  ) => {
+    setAlertConfig({ visible: true, type, title, message, buttons });
+  };
+
+  const hideAlert = () => {
+    setAlertConfig((prev) => ({ ...prev, visible: false }));
+  };
+
+  // Initialize courses from params.data
   const [editableCourses, setEditableCourses] = useState(() => {
     if (!params.data) return [];
     try {
@@ -39,6 +196,7 @@ export default function VerifySchedule() {
     }
   });
 
+  // Handle returning from edit screen with updated course
   useEffect(() => {
     if (params.updatedCourse && params.updatedIndex !== undefined) {
       const updated = JSON.parse(params.updatedCourse as string);
@@ -52,6 +210,7 @@ export default function VerifySchedule() {
         return newList;
       });
 
+      // Clear the params to prevent re-applying on subsequent renders
       router.setParams({ updatedCourse: undefined, updatedIndex: undefined });
     }
   }, [params.updatedCourse, params.updatedIndex]);
@@ -133,23 +292,29 @@ export default function VerifySchedule() {
 
   const handleConfirm = async () => {
     if (!user) {
-      Alert.alert("Error", "You must be logged in to add courses");
+      showAlert("error", "Authentication Required", "You must be logged in to add courses.", [
+        { text: "OK", style: "default" },
+      ]);
       return;
     }
 
     if (editableCourses.length === 0) {
-      Alert.alert("Error", "No courses to add");
+      showAlert("error", "No Courses", "There are no courses to add to your planner.", [
+        { text: "OK", style: "default" },
+      ]);
       return;
     }
 
     if (hasIssues) {
-      Alert.alert(
-        "Incomplete Data",
-        "Some courses have missing information (TBA fields). Do you want to continue anyway?",
+      showAlert(
+        "warning",
+        "Incomplete Information",
+        "Some courses have missing details (marked as TBA). You can still add them and update later, or go back to edit.",
         [
-          { text: "Cancel", style: "cancel" },
+          { text: "Go Back", style: "cancel" },
           { 
-            text: "Continue", 
+            text: "Add Anyway", 
+            style: "default",
             onPress: async () => {
               await addCoursesToDatabase();
             }
@@ -162,30 +327,32 @@ export default function VerifySchedule() {
   };
 
   const addCoursesToDatabase = async () => {
-  setIsLoading(true);
-  try {
-    console.log("=== STARTING DATABASE SAVE ===");
-    console.log("User ID:", user!.$id);
-    console.log("Courses to save:", JSON.stringify(editableCourses, null, 2));
-    
-    await addCourses(user!.$id, editableCourses);
-    
-    console.log("=== SAVE SUCCESSFUL ===");
-    setIsLoading(false);
-    setShowSuccessModal(true);
-  } catch (error) {
-    setIsLoading(false);
-    console.error("=== SAVE FAILED ===");
-    console.error("Error type:", error?.constructor?.name);
-    console.error("Error message:", error instanceof Error ? error.message : error);
-    console.error("Full error:", JSON.stringify(error, null, 2));
-    
-    Alert.alert(
-      "Error", 
-      `Failed to add courses. ${error instanceof Error ? error.message : "Unknown error"}\n\nCheck console for details.`
-    );
-  }
-};
+    setIsLoading(true);
+    try {
+      console.log("=== STARTING DATABASE SAVE ===");
+      console.log("User ID:", user!.$id);
+      console.log("Courses to save:", JSON.stringify(editableCourses, null, 2));
+      
+      await addCourses(user!.$id, editableCourses);
+      
+      console.log("=== SAVE SUCCESSFUL ===");
+      setIsLoading(false);
+      setShowSuccessModal(true);
+    } catch (error) {
+      setIsLoading(false);
+      console.error("=== SAVE FAILED ===");
+      console.error("Error type:", error?.constructor?.name);
+      console.error("Error message:", error instanceof Error ? error.message : error);
+      console.error("Full error:", JSON.stringify(error, null, 2));
+      
+      showAlert(
+        "error",
+        "Save Failed",
+        `Unable to add courses to your planner. ${error instanceof Error ? error.message : "Please try again."}`,
+        [{ text: "OK", style: "default" }]
+      );
+    }
+  };
 
   const handleModalClose = () => {
     setShowSuccessModal(false);
@@ -212,12 +379,17 @@ export default function VerifySchedule() {
     return false;
   };
 
+  // Generate current data string with updated courses for passing to edit screen
+  const getCurrentDataString = () => {
+    return JSON.stringify({ courses: editableCourses });
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#0F2F2A" />
-        </TouchableOpacity>
+             <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+                 <Ionicons name="chevron-back" size={24} color={Colors.title} />
+               </TouchableOpacity>
         <Text style={styles.headerTitle}>Verify Schedule</Text>
         <View style={{ width: 40 }} />
       </View>
@@ -259,7 +431,8 @@ export default function VerifySchedule() {
           <View style={styles.warningBanner}>
             <Ionicons name="warning" size={20} color="#F59E0B" />
             <View style={{ flex: 1 }}>
-              <Text style={styles.warningText}>Some data may need verification.</Text>
+              <Text style={styles.warningTitle}>Review Recommended</Text>
+              <Text style={styles.warningText}>Some fields need verification. Tap Edit to fix.</Text>
             </View>
           </View>
         )}
@@ -271,7 +444,7 @@ export default function VerifySchedule() {
           const needsVerification = courseNeedsVerification(course);
 
           return (
-            <View key={index} style={styles.courseCard}>
+            <View key={index} style={[styles.courseCard, needsVerification && styles.courseCardWarning]}>
               <View style={styles.cardHeader}>
                 <View>
                   <Text style={styles.courseCode}>{code}</Text>
@@ -289,11 +462,12 @@ export default function VerifySchedule() {
                     style={styles.editBadge}
                     onPress={() =>
                       router.push({
-                        pathname: "../../components/editCourse",
-                        params: { 
-                          course: JSON.stringify(course), 
+                        pathname: "/(import)/editCourse",
+                        params: {
+                          course: JSON.stringify(course),
                           index: index.toString(),
-                          data: params.data as string 
+                          // Pass the CURRENT state, not the original params.data
+                          data: getCurrentDataString(),
                         },
                       })
                     }
@@ -308,7 +482,9 @@ export default function VerifySchedule() {
 
               <View style={styles.facultyRow}>
                 <Ionicons name="person-outline" size={14} color="#546E7A" />
-                <Text style={styles.metaText}>{normalize(course.faculty)}</Text>
+                <Text style={[styles.metaText, normalize(course.faculty) === "TBA" && styles.tbaText]}>
+                  {normalize(course.faculty)}
+                </Text>
               </View>
 
               <View style={styles.schedulesContainer}>
@@ -328,14 +504,16 @@ export default function VerifySchedule() {
                     <View style={{ flex: 1 }}>
                       <View style={styles.metaRow}>
                         <Ionicons name="time-outline" size={14} color="#546E7A" />
-                        <Text style={styles.metaText}>
+                        <Text style={[styles.metaText, normalize(schedule.time) === "TBA" && styles.tbaText]}>
                           {!hasMultipleSchedules && `${schedule.days} `}
                           {normalize(schedule.time)}
                         </Text>
                       </View>
                       <View style={styles.metaRow}>
                         <Ionicons name="location-outline" size={14} color="#546E7A" />
-                        <Text style={styles.metaText}>{normalize(schedule.room)}</Text>
+                        <Text style={[styles.metaText, normalize(schedule.room) === "TBA" && styles.tbaText]}>
+                          {normalize(schedule.room)}
+                        </Text>
                       </View>
                     </View>
                   </View>
@@ -345,7 +523,7 @@ export default function VerifySchedule() {
               {needsVerification && (
                 <View style={styles.courseWarning}>
                   <Ionicons name="alert-circle" size={14} color="#F59E0B" />
-                  <Text style={styles.courseWarningText}>Please verify this information.</Text>
+                  <Text style={styles.courseWarningText}>Please verify this information</Text>
                 </View>
               )}
             </View>
@@ -361,11 +539,24 @@ export default function VerifySchedule() {
             {isLoading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.confirmText}>Confirm and Add to Planner</Text>
+              <>
+                <Ionicons name="checkmark-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
+                <Text style={styles.confirmText}>Confirm and Add to Planner</Text>
+              </>
             )}
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* Custom Alert Modal */}
+      <CustomAlert
+        visible={alertConfig.visible}
+        type={alertConfig.type}
+        title={alertConfig.title}
+        message={alertConfig.message}
+        buttons={alertConfig.buttons}
+        onClose={hideAlert}
+      />
 
       {/* Success Modal */}
       <SuccessModal
@@ -378,7 +569,6 @@ export default function VerifySchedule() {
   );
 }
 
-// ... keep all existing styles ...
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#E0F7FA" },
   header: { 
@@ -389,12 +579,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10 
   },
   backBtn: { 
-    width: 40, 
-    height: 40, 
-    borderRadius: 20, 
-    backgroundColor: "#fff", 
-    alignItems: "center", 
-    justifyContent: "center" 
+    padding: 4,
   },
   headerTitle: { fontSize: 18, fontWeight: "700", color: "#0F2F2A" },
   content: { padding: 20 },
@@ -403,7 +588,11 @@ const styles = StyleSheet.create({
     borderRadius: 16, 
     padding: 16, 
     marginBottom: 20, 
-    elevation: 4 
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
   },
   accuracyHeader: { 
     flexDirection: "row", 
@@ -419,7 +608,7 @@ const styles = StyleSheet.create({
     overflow: "hidden", 
     marginBottom: 12 
   },
-  progressBarFill: { height: "100%" },
+  progressBarFill: { height: "100%", borderRadius: 4 },
   statusGrid: { flexDirection: "row", gap: 12 },
   statusItem: { 
     flexDirection: "row", 
@@ -439,6 +628,8 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 16,
     gap: 10,
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
   },
   successTitle: {
     fontSize: 14,
@@ -452,24 +643,41 @@ const styles = StyleSheet.create({
   },
   warningBanner: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     backgroundColor: "#FEF3C7",
     borderRadius: 12,
     padding: 14,
     marginBottom: 16,
     gap: 10,
+    borderWidth: 1,
+    borderColor: "#FCD34D",
+  },
+  warningTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#92400E",
+    marginBottom: 2,
   },
   warningText: {
-    fontSize: 13,
-    color: "#92400E",
-    fontWeight: "600",
+    fontSize: 12,
+    color: "#B45309",
   },
   courseCard: { 
     backgroundColor: "#fff", 
     borderRadius: 16, 
     padding: 16, 
     marginBottom: 12, 
-    elevation: 2 
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  courseCardWarning: {
+    borderColor: "#FCD34D",
+    borderWidth: 1.5,
   },
   cardHeader: { flexDirection: "row", justifyContent: "space-between" },
   courseCode: { fontSize: 18, fontWeight: "800", color: "#20C997" },
@@ -540,6 +748,11 @@ const styles = StyleSheet.create({
   },
   metaRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
   metaText: { fontSize: 13, color: "#546E7A" },
+  tbaText: { 
+    color: "#F59E0B", 
+    fontStyle: "italic",
+    fontWeight: "500",
+  },
   courseWarning: {
     flexDirection: "row",
     alignItems: "center",
@@ -559,8 +772,74 @@ const styles = StyleSheet.create({
     backgroundColor: "#20C997", 
     paddingVertical: 16, 
     borderRadius: 16, 
-    alignItems: "center" 
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "center",
+    shadowColor: "#20C997",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
   confirmBtnDisabled: { backgroundColor: "#B0E0D7" },
   confirmText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  
+  // Custom Alert Styles
+  alertOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  alertContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    padding: 24,
+    width: width - 48,
+    maxWidth: 340,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  alertIconContainer: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  alertTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0F2F2A",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  alertMessage: {
+    fontSize: 14,
+    color: "#546E7A",
+    textAlign: "center",
+    lineHeight: 20,
+    marginBottom: 24,
+  },
+  alertButtonsContainer: {
+    flexDirection: "row",
+    gap: 12,
+    width: "100%",
+  },
+  alertButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  alertButtonText: {
+    fontSize: 15,
+    fontWeight: "600",
+  },
 });
