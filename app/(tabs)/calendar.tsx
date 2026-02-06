@@ -1,4 +1,4 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, Feather } from '@expo/vector-icons';
 import dayjs from 'dayjs';
 import React, { useState, useCallback, useMemo } from 'react';
 import {
@@ -25,7 +25,8 @@ import {
 } from '@/lib/database';
 import { useFocusEffect } from 'expo-router';
 import EditModal from '@/components/editModal'; 
-import CustomAlert from '@/components/Alerts';
+import { getPendingTasksSorted, Task } from '@/lib/taskService';
+import { getPriorityStyles, Priority } from '@/lib/taskPriority';
 
 type CalendarMode = 'day' | 'week' | 'month';
 
@@ -57,19 +58,21 @@ function getCourseColor(courseCode: string) {
   return COURSE_COLORS[hash % COURSE_COLORS.length];
 }
 
-interface CourseEvent {
+interface CalendarEvent {
   title: string;
   subtitle: string;
   start: Date;
   end: Date;
   note: string;
   courseCode: string;
-  courseData: Course;
+  courseData: Course | null;
   color: { primary: string; light: string; dark: string };
+  isTask?: boolean;
+  taskData?: Task;
 }
 
-function courseToEvents(course: Course, viewStart: Date, viewEnd: Date): CourseEvent[] {
-  const events: CourseEvent[] = [];
+function courseToEvents(course: Course, viewStart: Date, viewEnd: Date): CalendarEvent[] {
+  const events: CalendarEvent[] = [];
   const color = getCourseColor(course.code);
   const schedules = parseTimeString(course.time);
 
@@ -78,7 +81,6 @@ function courseToEvents(course: Course, viewStart: Date, viewEnd: Date): CourseE
   const semesterStart = dayjs('2026-01-01');
   const semesterEnd = dayjs('2026-05-31');
 
-  // Only generate events for the visible range (with buffer)
   const rangeStart = dayjs(viewStart).isBefore(semesterStart) ? semesterStart : dayjs(viewStart);
   const rangeEnd = dayjs(viewEnd).isAfter(semesterEnd) ? semesterEnd : dayjs(viewEnd);
 
@@ -123,6 +125,7 @@ function courseToEvents(course: Course, viewStart: Date, viewEnd: Date): CourseE
             courseCode: course.code,
             courseData: course,
             color,
+            isTask: false,
           });
         }
         currentWeekDate = currentWeekDate.add(1, 'week');
@@ -132,16 +135,49 @@ function courseToEvents(course: Course, viewStart: Date, viewEnd: Date): CourseE
   return events;
 }
 
+function taskToEvents(tasks: Task[]): CalendarEvent[] {
+  return tasks.map((task) => {
+    const priorityStyles = getPriorityStyles(task.priority as Priority);
+    const dueDate = dayjs(task.dueDate);
+
+    const start = dueDate.toDate();
+    const end = dueDate.add(1, 'hour').toDate();
+
+    return {
+      title: `📌 ${task.title}`,
+      subtitle: `${task.courseCode} • ${task.priority}`,
+      start,
+      end,
+      note: `${task.priority} Priority • ${task.taskType}`,
+      courseCode: task.courseCode,
+      courseData: null,
+      color: {
+        primary: priorityStyles.accent,
+        light: priorityStyles.cardBg,
+        dark: priorityStyles.tagText,
+      },
+      isTask: true,
+      taskData: task,
+    };
+  });
+}
+
 export default function CalendarScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const [mode, setMode] = useState<CalendarMode>('week');
   const [date, setDate] = useState(new Date());
   const [courses, setCourses] = useState<Course[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showMenu, setShowMenu] = useState(false);
-  const [selectedEvent, setSelectedEvent] = useState<CourseEvent | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
+
+  // --- Modal States ---
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const [courseToDelete, setCourseToDelete] = useState<{ id: string; code: string } | null>(null);
+  const [clearAllModalVisible, setClearAllModalVisible] = useState(false);
 
   const SCREEN_HEIGHT = Dimensions.get('window').height;
   const TAB_BAR_HEIGHT = 75;
@@ -157,11 +193,11 @@ export default function CalendarScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      loadCourses();
+      loadData();
     }, [user])
   );
 
-  const loadCourses = async () => {
+  const loadData = async () => {
     if (!user) {
       setIsLoading(false);
       return;
@@ -170,9 +206,12 @@ export default function CalendarScreen() {
     try {
       const fetchedCourses = await getCourses(user.$id);
       setCourses(fetchedCourses);
+
+      const fetchedTasks = await getPendingTasksSorted(user.$id);
+      setTasks(fetchedTasks);
     } catch (error) {
       console.error(error);
-      Alert.alert('Error', 'Failed to load courses');
+      Alert.alert('Error', 'Failed to load data');
     } finally {
       setIsLoading(false);
     }
@@ -182,52 +221,37 @@ export default function CalendarScreen() {
     return courses.reduce((sum, course) => sum + (course.units || 0), 0);
   };
 
+  // --- Actions ---
+
   const handleClearAllCourses = () => {
     if (!user) return;
-    setShowMenu(false);
-    Alert.alert(
-      'Clear All Courses?',
-      'This will delete all courses. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete All',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteAllCourses(user.$id);
-              loadCourses();
-            } catch (error) {
-              console.error(error);
-              Alert.alert('Error', 'Failed to clear courses');
-            }
-          },
-        },
-      ]
-    );
+    setShowMenu(false); // Close menu first
+    setClearAllModalVisible(true); // Open custom modal
   };
 
-  const handleDeleteCourse = async (courseId: string) => {
-    Alert.alert(
-      "Delete Course",
-      "Are you sure you want to delete this course?",
-      [
-        { text: "Cancel", style: "cancel" },
-        { 
-          text: "Delete", 
-          style: "destructive", 
-          onPress: async () => {
-            try {
-              await deleteCourse(courseId);
-              setSelectedEvent(null);
-              loadCourses();
-            } catch (error) {
-              Alert.alert("Error", "Failed to delete course");
-            }
-          } 
-        }
-      ]
-    );
+  const confirmClearAll = async () => {
+    if (!user) return;
+    try {
+      await deleteAllCourses(user.$id);
+      setClearAllModalVisible(false);
+      loadData();
+    } catch (error) {
+      console.error(error);
+      Alert.alert('Error', 'Failed to clear courses');
+    }
+  };
+
+  const confirmDeleteCourse = async () => {
+    if (!courseToDelete) return;
+    try {
+      await deleteCourse(courseToDelete.id);
+      setDeleteModalVisible(false);
+      setCourseToDelete(null);
+      setSelectedEvent(null);
+      loadData();
+    } catch (error) {
+      Alert.alert("Error", "Failed to delete course");
+    }
   };
 
   const handlePrev = () => {
@@ -243,10 +267,9 @@ export default function CalendarScreen() {
   const handleDateTitlePress = () => setDate(new Date());
 
   const handleEventPress = useCallback((event: any) => {
-    setSelectedEvent(event as CourseEvent);
+    setSelectedEvent(event as CalendarEvent);
   }, []);
 
-  // Calculate visible date range based on current mode
   const dateRange = useMemo(() => {
     const currentDate = dayjs(date);
     let start: Date, end: Date;
@@ -265,27 +288,81 @@ export default function CalendarScreen() {
     return { start, end };
   }, [date, mode]);
 
-  // Memoize events generation - only recalculate when courses or date range changes
   const events = useMemo(() => {
-    const allEvents: CourseEvent[] = [];
+    const allEvents: CalendarEvent[] = [];
+
     for (const course of courses) {
       const courseEvents = courseToEvents(course, dateRange.start, dateRange.end);
       allEvents.push(...courseEvents);
     }
-    return allEvents;
-  }, [courses, dateRange]);
 
-  // Memoize event cell style function
+    const taskEvents = taskToEvents(tasks).filter((e) => {
+      const eventDay = dayjs(e.start);
+      return (
+        (eventDay.isAfter(dayjs(dateRange.start)) || eventDay.isSame(dayjs(dateRange.start), 'day')) &&
+        (eventDay.isBefore(dayjs(dateRange.end)) || eventDay.isSame(dayjs(dateRange.end), 'day'))
+      );
+    });
+    allEvents.push(...taskEvents);
+
+    return allEvents;
+  }, [courses, tasks, dateRange]);
+
   const eventCellStyle = useCallback((event: any) => {
-    const courseEvent = event as CourseEvent;
+    const calEvent = event as CalendarEvent;
+
+    if (calEvent.isTask) {
+      return {
+        backgroundColor: calEvent.color.light,
+        borderRadius: 8,
+        borderLeftWidth: 4,
+        borderLeftColor: calEvent.color.primary,
+        padding: 4,
+      };
+    }
+
     return {
-      backgroundColor: courseEvent.color.primary,
+      backgroundColor: calEvent.color.primary,
       borderRadius: 8,
       borderLeftWidth: 4,
-      borderLeftColor: courseEvent.color.dark,
+      borderLeftColor: calEvent.color.dark,
       padding: 4,
     };
   }, []);
+
+  const renderEvent = useCallback((event: any, touchableOpacityProps: any) => {
+    const calEvent = event as CalendarEvent;
+    const textColor = calEvent.isTask ? calEvent.color.dark : '#FFFFFF';
+
+    // Destructure key out to satisfy React's "don't spread key" warning
+    const { key, ...otherProps } = touchableOpacityProps;
+
+    return (
+      <TouchableOpacity key={key} {...otherProps}>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: 11, fontWeight: '700', color: textColor }} numberOfLines={1}>
+            {calEvent.title}
+          </Text>
+          {mode !== 'month' && (
+            <Text style={{ fontSize: 9, color: textColor, opacity: 0.9 }} numberOfLines={1}>
+              {calEvent.note}
+            </Text>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  }, [mode]);
+
+  const formatTaskDueInfo = (task: Task) => {
+    const due = dayjs(task.dueDate);
+    const today = dayjs().startOf('day');
+    const diffDays = due.diff(today, 'day');
+
+    if (diffDays < 0) return { text: `Overdue by ${Math.abs(diffDays)} day(s)`, color: '#D32F2F' };
+    if (diffDays === 0) return { text: 'Due Today', color: '#FF9800' };
+    if (diffDays === 1) return { text: 'Due Tomorrow', color: '#F57F17' };
+    return { text: due.format('MMM D, YYYY'), color: '#666' };
+  };
 
   if (isLoading) {
     return (
@@ -350,8 +427,8 @@ export default function CalendarScreen() {
         {events.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="calendar-outline" size={64} color="#B0BEC5" />
-            <Text style={styles.emptyTitle}>No Classes</Text>
-            <Text style={styles.emptySubtitle}>Import a COR to get started.</Text>
+            <Text style={styles.emptyTitle}>No Classes or Tasks</Text>
+            <Text style={styles.emptySubtitle}>Import a COR or add tasks to get started.</Text>
           </View>
         ) : (
           <Calendar
@@ -363,11 +440,12 @@ export default function CalendarScreen() {
             swipeEnabled={true}
             onPressEvent={handleEventPress}
             eventCellStyle={eventCellStyle}
+            renderEvent={renderEvent}
           />
         )}
       </View>
 
-      {/* MENU MODAL */}
+      {/* MENU MODAL (Stats & Clear All) */}
       <Modal
         visible={showMenu}
         transparent={true}
@@ -406,10 +484,10 @@ export default function CalendarScreen() {
 
               <View style={styles.statCard}>
                 <View style={[styles.statIconContainer, { backgroundColor: '#FEF3C7' }]}>
-                  <Ionicons name="calendar" size={24} color="#F59E0B" />
+                  <Ionicons name="checkbox-outline" size={24} color="#F59E0B" />
                 </View>
-                <Text style={styles.statValue}>{events.length}</Text>
-                <Text style={styles.statLabel}>Class Sessions</Text>
+                <Text style={styles.statValue}>{tasks.length}</Text>
+                <Text style={styles.statLabel}>Pending Tasks</Text>
               </View>
             </View>
 
@@ -432,7 +510,7 @@ export default function CalendarScreen() {
 
       {/* COURSE DETAILS MODAL */}
       <Modal
-        visible={selectedEvent !== null}
+        visible={selectedEvent !== null && !selectedEvent?.isTask}
         transparent={true}
         animationType="fade"
         onRequestClose={() => setSelectedEvent(null)}
@@ -443,7 +521,7 @@ export default function CalendarScreen() {
           onPress={() => setSelectedEvent(null)}
         >
           <View style={styles.modalContent} onStartShouldSetResponder={() => true}>
-            {selectedEvent && (
+            {selectedEvent && !selectedEvent.isTask && selectedEvent.courseData && (
               <>
                 <View style={styles.modalHeader}>
                   <View style={[styles.colorIndicator, { backgroundColor: selectedEvent.color.primary }]} />
@@ -511,7 +589,6 @@ export default function CalendarScreen() {
                     </View>
                   </View>
 
-                  {/* ACTION BUTTONS (EDIT/DELETE) */}
                   <View style={styles.actionRow}>
                     <TouchableOpacity 
                       style={styles.editBtn} 
@@ -523,7 +600,13 @@ export default function CalendarScreen() {
 
                     <TouchableOpacity 
                       style={styles.deleteBtn}
-                      onPress={() => handleDeleteCourse(selectedEvent.courseData.$id!)}
+                      onPress={() => {
+                        setCourseToDelete({ 
+                          id: selectedEvent.courseData!.$id!, 
+                          code: selectedEvent.courseData!.code 
+                        });
+                        setDeleteModalVisible(true);
+                      }}
                     >
                       <Ionicons name="trash-outline" size={20} color="#DC2626" />
                       <Text style={styles.deleteBtnText}>Delete</Text>
@@ -536,8 +619,200 @@ export default function CalendarScreen() {
         </TouchableOpacity>
       </Modal>
 
-      {/* EDIT MODAL COMPONENT */}
-      {selectedEvent && (
+      {/* TASK DETAILS MODAL */}
+      <Modal
+        visible={selectedEvent !== null && selectedEvent?.isTask === true}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setSelectedEvent(null)}
+      >
+        <TouchableOpacity 
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setSelectedEvent(null)}
+        >
+          <View style={styles.modalContent} onStartShouldSetResponder={() => true}>
+            {selectedEvent && selectedEvent.isTask && selectedEvent.taskData && (
+              <>
+                <View style={styles.modalHeader}>
+                  <View style={[styles.colorIndicator, { backgroundColor: selectedEvent.color.primary }]} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modalCourseCode}>{selectedEvent.taskData.title}</Text>
+                    <Text style={styles.modalCourseTitle}>
+                      {selectedEvent.taskData.courseCode} • Task
+                    </Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setSelectedEvent(null)} style={styles.closeBtn}>
+                    <Ionicons name="close" size={24} color="#6B7280" />
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.modalBody}>
+                  <View style={styles.detailRow}>
+                    <View style={[styles.detailIcon, { backgroundColor: selectedEvent.color.light }]}>
+                      <Ionicons name="flag-outline" size={20} color={selectedEvent.color.primary} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.detailLabel}>Priority</Text>
+                      <Text style={[styles.detailValue, { color: selectedEvent.color.primary }]}>
+                        {selectedEvent.taskData.priority} Priority
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.detailRow}>
+                    <View style={styles.detailIcon}>
+                      <Ionicons name="calendar-outline" size={20} color={selectedEvent.color.primary} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.detailLabel}>Deadline</Text>
+                      <Text style={[
+                        styles.detailValue, 
+                        { color: formatTaskDueInfo(selectedEvent.taskData).color }
+                      ]}>
+                        {formatTaskDueInfo(selectedEvent.taskData).text}
+                      </Text>
+                      <Text style={styles.detailTime}>
+                        {dayjs(selectedEvent.taskData.dueDate).format('h:mm A')}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.detailRow}>
+                    <View style={styles.detailIcon}>
+                      <Ionicons name="document-text-outline" size={20} color={selectedEvent.color.primary} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.detailLabel}>Type</Text>
+                      <Text style={styles.detailValue}>
+                        {selectedEvent.taskData.taskType.charAt(0).toUpperCase() + selectedEvent.taskData.taskType.slice(1)}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.detailRow}>
+                    <View style={styles.detailIcon}>
+                      <Ionicons name="speedometer-outline" size={20} color={selectedEvent.color.primary} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.detailLabel}>Difficulty</Text>
+                      <Text style={styles.detailValue}>
+                        {selectedEvent.taskData.difficulty.charAt(0).toUpperCase() + selectedEvent.taskData.difficulty.slice(1)}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.detailRow}>
+                    <View style={styles.detailIcon}>
+                      <Ionicons name="time-outline" size={20} color={selectedEvent.color.primary} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.detailLabel}>Estimated Time</Text>
+                      <Text style={styles.detailValue}>
+                        {selectedEvent.taskData.estimatedMinutes < 60
+                          ? `${selectedEvent.taskData.estimatedMinutes} mins`
+                          : `${Math.floor(selectedEvent.taskData.estimatedMinutes / 60)}h ${selectedEvent.taskData.estimatedMinutes % 60}m`}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.detailRow}>
+                    <View style={styles.detailIcon}>
+                      <Ionicons name="book-outline" size={20} color={selectedEvent.color.primary} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.detailLabel}>Course</Text>
+                      <Text style={styles.detailValue}>{selectedEvent.taskData.courseCode}</Text>
+                    </View>
+                  </View>
+
+                  {selectedEvent.taskData.isMajorSubject && (
+                    <View style={styles.majorSubjectBadge}>
+                      <Text style={styles.majorSubjectText}>⭐ Major Subject</Text>
+                    </View>
+                  )}
+                </View>
+              </>
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* CONFIRM DELETE COURSE MODAL */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={deleteModalVisible}
+        onRequestClose={() => setDeleteModalVisible(false)}
+      >
+        <View style={styles.deleteModalOverlay}>
+          <View style={styles.deleteModalContainer}>
+            <View style={styles.deleteModalIconBg}>
+              <Feather name="trash-2" size={28} color="#EF5350" />
+            </View>
+            
+            <Text style={styles.deleteModalTitle}>Delete Course?</Text>
+            <Text style={styles.deleteModalSubtitle}>
+              Are you sure you want to remove {courseToDelete?.code}? This will also affect linked tasks in your schedule.
+            </Text>
+
+            <View style={styles.deleteModalActionRow}>
+              <TouchableOpacity 
+                style={styles.deleteModalCancelBtn} 
+                onPress={() => setDeleteModalVisible(false)}
+              >
+                <Text style={styles.deleteModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.deleteModalConfirmBtn} 
+                onPress={confirmDeleteCourse}
+              >
+                <Text style={styles.deleteModalConfirmText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* REDESIGNED CLEAR ALL CONFIRMATION MODAL */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={clearAllModalVisible}
+        onRequestClose={() => setClearAllModalVisible(false)}
+      >
+        <View style={styles.deleteModalOverlay}>
+          <View style={styles.deleteModalContainer}>
+            <View style={[styles.deleteModalIconBg, { backgroundColor: '#FFF3E0' }]}>
+              <Ionicons name="warning-outline" size={32} color="#FB8C00" />
+            </View>
+            
+            <Text style={styles.deleteModalTitle}>Clear Everything?</Text>
+            <Text style={styles.deleteModalSubtitle}>
+              This will permanently delete all courses and their schedules. This action cannot be reversed.
+            </Text>
+
+            <View style={styles.deleteModalActionRow}>
+              <TouchableOpacity 
+                style={styles.deleteModalCancelBtn} 
+                onPress={() => setClearAllModalVisible(false)}
+              >
+                <Text style={styles.deleteModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[styles.deleteModalConfirmBtn, { backgroundColor: '#EF5350' }]} 
+                onPress={confirmClearAll}
+              >
+                <Text style={styles.deleteModalConfirmText}>Clear All</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {selectedEvent && selectedEvent.courseData && !selectedEvent.isTask && (
         <EditModal 
           visible={showEditModal}
           course={selectedEvent.courseData}
@@ -545,7 +820,7 @@ export default function CalendarScreen() {
           onSave={() => {
             setShowEditModal(false);
             setSelectedEvent(null);
-            loadCourses();
+            loadData();
           }}
         />
       )}
@@ -772,7 +1047,12 @@ const styles = StyleSheet.create({
     color: '#1F2937',
     fontWeight: '600',
   },
-  // NEW STYLES FOR BUTTONS
+  detailTime: {
+    fontSize: 13,
+    color: '#6B7280',
+    fontWeight: '500',
+    marginTop: 2,
+  },
   actionRow: {
     flexDirection: 'row',
     gap: 12,
@@ -812,5 +1092,91 @@ const styles = StyleSheet.create({
     color: '#DC2626',
     fontWeight: '700',
     fontSize: 14,
+  },
+  majorSubjectBadge: {
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  majorSubjectText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#D97706',
+  },
+  // --- New Modal Styles ---
+  deleteModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  deleteModalContainer: {
+    backgroundColor: 'white',
+    borderRadius: 28,
+    padding: 24,
+    width: '100%',
+    maxWidth: 340,
+    alignItems: 'center',
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  deleteModalIconBg: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#FFEBEE',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  deleteModalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#111',
+    marginBottom: 8,
+  },
+  deleteModalSubtitle: {
+    fontSize: 15,
+    color: '#666',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 24,
+  },
+  deleteModalActionRow: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  deleteModalCancelBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 16,
+    backgroundColor: '#F5F5F5',
+    alignItems: 'center',
+  },
+  deleteModalCancelText: {
+    color: '#666',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  deleteModalConfirmBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 16,
+    backgroundColor: '#EF5350',
+    alignItems: 'center',
+  },
+  deleteModalConfirmText: {
+    color: 'white',
+    fontWeight: '700',
+    fontSize: 15,
   },
 });

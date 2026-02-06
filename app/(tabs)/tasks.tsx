@@ -1,38 +1,39 @@
-import React, { useState, useMemo, useCallback } from "react";
-import {
-  View,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  ScrollView,
-  ActivityIndicator,
-  Alert,
-  RefreshControl,
-} from "react-native";
-import { Text } from "react-native-paper";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter, useFocusEffect } from "expo-router";
-import { MaterialCommunityIcons, Ionicons, Feather } from "@expo/vector-icons";
+import { Colors } from "@/constants/colors";
 import { useAuth } from "@/lib/auth-context";
 import {
-  getPendingTasksSorted,
-  getTasksByStatus,
-  completeTask,
-  deleteTask,
-  reopenTask,
-  recalculateAllPriorities,
-  getTaskStats,
-  Task,
-} from "@/lib/taskService";
-import {
-  getPriorityStyles,
-  getPriorityScore,
   formatEstimatedTime,
+  getPriorityScore,
+  getPriorityStyles,
   Priority,
 } from "@/lib/taskPriority";
+import {
+  completeTask,
+  deleteTask,
+  getPendingTasksSorted,
+  getTasksByStatus,
+  getTaskStats,
+  recalculateAllPriorities,
+  reopenTask,
+  Task,
+} from "@/lib/taskService";
+import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
-import { Colors } from "@/constants/colors";
+import { useFocusEffect, useRouter } from "expo-router";
+import React, { useCallback, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Modal,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { Surface, Text } from "react-native-paper";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 dayjs.extend(relativeTime);
 
@@ -48,6 +49,13 @@ export default function SmartTasksScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [stats, setStats] = useState<any>(null);
+
+  // Modal State
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const [taskToDelete, setTaskToDelete] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -68,7 +76,6 @@ export default function SmartTasksScreen() {
       const fetchedTasks = await getPendingTasksSorted(user.$id);
       setTasks(fetchedTasks);
 
-      // Fetch completed tasks
       const fetchedCompleted = await getTasksByStatus(user.$id, "completed");
       setCompletedTasks(fetchedCompleted);
 
@@ -105,30 +112,26 @@ export default function SmartTasksScreen() {
     }
   };
 
-  const handleDeleteTask = (taskId: string, title: string) => {
-    Alert.alert("Delete Task", `Are you sure you want to delete "${title}"?`, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            await deleteTask(taskId);
-            loadTasks();
-          } catch (error) {
-            Alert.alert("Error", "Failed to delete task");
-          }
-        },
-      },
-    ]);
+  const confirmDeleteTask = async () => {
+    if (!taskToDelete) return;
+    try {
+      await deleteTask(taskToDelete.id);
+      setDeleteModalVisible(false);
+      setTaskToDelete(null);
+      loadTasks();
+    } catch (error) {
+      Alert.alert("Error", "Failed to delete task");
+    }
   };
 
+  // UPDATED: Now includes time in the formatted string
   const formatDueDate = (
     dueDate: string,
   ): { text: string; isOverdue: boolean; isToday: boolean } => {
     const due = dayjs(dueDate);
     const today = dayjs().startOf("day");
     const diffDays = due.diff(today, "day");
+    const timeStr = due.format("h:mm A"); // e.g., "11:59 PM"
 
     if (diffDays < 0) {
       return {
@@ -137,14 +140,18 @@ export default function SmartTasksScreen() {
         isToday: false,
       };
     } else if (diffDays === 0) {
-      return { text: "Due Today", isOverdue: false, isToday: true };
+      return { text: `Today, ${timeStr}`, isOverdue: false, isToday: true };
     } else if (diffDays === 1) {
-      return { text: "Tomorrow", isOverdue: false, isToday: false };
+      return { text: `Tomorrow, ${timeStr}`, isOverdue: false, isToday: false };
     } else if (diffDays <= 7) {
-      return { text: due.format("dddd"), isOverdue: false, isToday: false };
+      return {
+        text: due.format(`dddd, ${timeStr}`),
+        isOverdue: false,
+        isToday: false,
+      };
     } else {
       return {
-        text: due.format("MMM D, YYYY"),
+        text: due.format(`MMM D, ${timeStr}`),
         isOverdue: false,
         isToday: false,
       };
@@ -169,10 +176,8 @@ export default function SmartTasksScreen() {
   };
 
   const processedTasks = useMemo(() => {
-    // If viewing completed tasks
     if (activeFilter === "Completed") {
       return [...completedTasks].sort((a, b) => {
-        // Sort by completion date, most recent first
         const dateA = a.completedAt ? new Date(a.completedAt).getTime() : 0;
         const dateB = b.completedAt ? new Date(b.completedAt).getTime() : 0;
         return dateB - dateA;
@@ -180,7 +185,6 @@ export default function SmartTasksScreen() {
     }
 
     let filtered = tasks;
-
     if (activeFilter !== "All Tasks") {
       filtered = tasks.filter((t) => t.priority === activeFilter);
     }
@@ -193,11 +197,6 @@ export default function SmartTasksScreen() {
       return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
     });
   }, [tasks, completedTasks, activeFilter]);
-
-  // Navigate back to home tab
-  const handleGoBack = () => {
-    router.replace("/(tabs)/home");
-  };
 
   const renderTaskCard = ({ item }: { item: Task }) => {
     const stylesConfig = getPriorityStyles(item.priority as Priority);
@@ -243,7 +242,10 @@ export default function SmartTasksScreen() {
               styles.deleteButton,
               isCompleted && styles.deleteButtonCompleted,
             ]}
-            onPress={() => handleDeleteTask(item.$id!, item.title)}
+            onPress={() => {
+              setTaskToDelete({ id: item.$id!, title: item.title });
+              setDeleteModalVisible(true);
+            }}
           >
             <Feather name="trash-2" size={14} color="white" />
           </TouchableOpacity>
@@ -452,8 +454,6 @@ export default function SmartTasksScreen() {
         </TouchableOpacity>
       </View>
 
-  
-
       {/* Horizontal Filter Tabs */}
       <View style={styles.filterContainer}>
         <ScrollView
@@ -522,6 +522,44 @@ export default function SmartTasksScreen() {
           />
         }
       />
+
+      {/* REDESIGNED DELETE MODAL */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={deleteModalVisible}
+        onRequestClose={() => setDeleteModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Surface style={styles.modalContainer} elevation={5}>
+            <View style={styles.modalIconBg}>
+              <Feather name="trash-2" size={28} color="#EF5350" />
+            </View>
+
+            <Text style={styles.modalTitle}>Delete Task?</Text>
+            <Text style={styles.modalSubtitle}>
+              Are you sure you want to delete &quot;{taskToDelete?.title}&quot;?
+              This action cannot be undone.
+            </Text>
+
+            <View style={styles.modalActionRow}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={() => setDeleteModalVisible(false)}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.modalDeleteBtn}
+                onPress={confirmDeleteTask}
+              >
+                <Text style={styles.modalDeleteText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </Surface>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -539,16 +577,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 12,
   },
-  backBtn:{
+  backBtn: {
     padding: 4,
-  },
-  backButton: {
-    backgroundColor: "#4DB6AC",
-    borderRadius: 50,
-    width: 40,
-    height: 40,
-    alignItems: "center",
-    justifyContent: "center",
   },
   addButton: {
     backgroundColor: "#26A69A",
@@ -565,25 +595,6 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 22, fontWeight: "bold", color: "#000" },
   headerSubtitle: { fontSize: 13, color: "#666", marginTop: 1 },
-
-  statsBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 18,
-    paddingBottom: 12,
-    gap: 16,
-  },
-  statItem: { flexDirection: "row", alignItems: "center", gap: 4 },
-  statNumber: { fontSize: 14, fontWeight: "700", color: "#333" },
-  statDot: { width: 8, height: 8, borderRadius: 4 },
-  overdueStatContainer: {
-    marginLeft: "auto",
-    backgroundColor: "#FFEBEE",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  overdueStatText: { fontSize: 12, color: "#C62828", fontWeight: "600" },
 
   filterContainer: { height: 48, marginBottom: 12 },
   filterScroll: { paddingHorizontal: 18, gap: 10 },
@@ -740,4 +751,71 @@ const styles = StyleSheet.create({
     borderRadius: 24,
   },
   emptyButtonText: { color: "white", fontSize: 15, fontWeight: "600" },
+
+  // Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  modalContainer: {
+    backgroundColor: "white",
+    borderRadius: 28,
+    padding: 24,
+    width: "100%",
+    alignItems: "center",
+  },
+  modalIconBg: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: "#FFEBEE",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#111",
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    fontSize: 15,
+    color: "#666",
+    textAlign: "center",
+    lineHeight: 22,
+    marginBottom: 24,
+  },
+  modalActionRow: {
+    flexDirection: "row",
+    gap: 12,
+    width: "100%",
+  },
+  modalCancelBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 16,
+    backgroundColor: "#F5F5F5",
+    alignItems: "center",
+  },
+  modalCancelText: {
+    color: "#666",
+    fontWeight: "700",
+    fontSize: 15,
+  },
+  modalDeleteBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 16,
+    backgroundColor: "#EF5350",
+    alignItems: "center",
+  },
+  modalDeleteText: {
+    color: "white",
+    fontWeight: "700",
+    fontSize: 15,
+  },
 });

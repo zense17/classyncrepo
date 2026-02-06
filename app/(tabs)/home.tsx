@@ -10,6 +10,7 @@ import {
   Text,
   TouchableOpacity,
   View,
+  Modal,
 } from "react-native";
 import { Colors } from "../../constants/colors";
 import { useAuth } from "../../lib/auth-context";
@@ -33,26 +34,10 @@ Notifications.setNotificationHandler({
 
 // Day mapping for schedule filtering
 const DAY_MAP: Record<string, number> = {
-  Sun: 0,
-  Sunday: 0,
-  Mon: 1,
-  Monday: 1,
-  M: 1,
-  Tue: 2,
-  Tuesday: 2,
-  T: 2,
-  Wed: 3,
-  Wednesday: 3,
-  W: 3,
-  Thu: 4,
-  Th: 4,
-  Thursday: 4,
-  Fri: 5,
-  Friday: 5,
-  F: 5,
-  Sat: 6,
-  Saturday: 6,
-  S: 6,
+  Sun: 0, Sunday: 0, Mon: 1, Monday: 1, M: 1,
+  Tue: 2, Tuesday: 2, T: 2, Wed: 3, Wednesday: 3, W: 3,
+  Thu: 4, Th: 4, Thursday: 4, Fri: 5, Friday: 5, F: 5,
+  Sat: 6, Saturday: 6, S: 6,
 };
 
 // Color palette for courses
@@ -95,8 +80,8 @@ const Home = () => {
   const [todayClasses, setTodayClasses] = useState<TodayClass[]>([]);
   const [isLoadingSchedule, setIsLoadingSchedule] = useState(true);
 
-  // State for FAB menu
-  const [showFabMenu, setShowFabMenu] = useState(false);
+  // State for Create Modal
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   // State for the Bell Dot
   const [hasUnread, setHasUnread] = useState(false);
@@ -129,12 +114,12 @@ const Home = () => {
     if (!user) return;
 
     try {
-      // --- 1. Load Task Stats (For the Dashboard Cards) ---
+      // --- 1. Load Task Stats ---
       const stats = await getTaskStats(user.$id);
       setTaskStats(stats);
       setIsLoadingTasks(false);
 
-      // --- 2. Load Schedule (For Today's Classes) ---
+      // --- 2. Load Schedule ---
       const courses = await getCourses(user.$id);
 
       // Run Scheduler
@@ -221,12 +206,12 @@ const Home = () => {
   const completedCount = taskStats?.completed || 0;
 
   const handleAddTask = () => {
-    setShowFabMenu(false);
+    setShowCreateModal(false);
     router.push("/(tasks)/addTask");
   };
 
   const handleAddClass = () => {
-    setShowFabMenu(false);
+    setShowCreateModal(false);
     router.push("/(import)/addClass");
   };
 
@@ -435,60 +420,63 @@ const Home = () => {
         <View style={{ height: 90 }} />
       </ScrollView>
 
-      {/* FAB Menu */}
-      {showFabMenu && (
-        <Pressable
-          style={styles.fabOverlay}
-          onPress={() => setShowFabMenu(false)}
-        />
-      )}
-      {showFabMenu && (
-        <View style={styles.fabMenu}>
-          <TouchableOpacity
-            style={styles.fabMenuItem}
-            onPress={handleAddTask}
-            activeOpacity={0.8}
-          >
-            <View style={styles.fabLabelPill}>
-              <Text style={styles.fabMenuText}>Task</Text>
-            </View>
-            <View style={[styles.fabMenuIcon, { backgroundColor: "#E8F5E9" }]}>
-              <MaterialCommunityIcons
-                name="format-list-checks"
-                size={20}
-                color="#4CAF50"
-              />
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.fabMenuItem}
-            onPress={handleAddClass}
-            activeOpacity={0.8}
-          >
-            <View style={styles.fabLabelPill}>
-              <Text style={styles.fabMenuText}>Class</Text>
-            </View>
-            <View style={[styles.fabMenuIcon, { backgroundColor: "#E3F2FD" }]}>
-              <MaterialCommunityIcons
-                name="calendar-edit"
-                size={20}
-                color="#2196F3"
-              />
-            </View>
-          </TouchableOpacity>
-        </View>
-      )}
+      {/* NEW CENTERED CREATE MODAL */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={showCreateModal}
+        onRequestClose={() => setShowCreateModal(false)}
+      >
+        <TouchableOpacity 
+          style={styles.modalOverlay} 
+          activeOpacity={1} 
+          onPress={() => setShowCreateModal(false)}
+        >
+          <View style={styles.createModalContainer} onStartShouldSetResponder={() => true}>
+            <Text style={styles.createModalTitle}>Create New</Text>
+            
+            <TouchableOpacity 
+              style={styles.createOptionBtn} 
+              onPress={handleAddTask}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.createIconBg, { backgroundColor: '#E8F5E9' }]}>
+                <MaterialCommunityIcons name="format-list-checks" size={26} color="#4CAF50" />
+              </View>
+              <View style={styles.createTextWrap}>
+                <Text style={styles.createOptionTitle}>New Task</Text>
+                <Text style={styles.createOptionSub}>Add a new assignment or todo</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#CFD8DC" />
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={styles.createOptionBtn} 
+              onPress={handleAddClass}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.createIconBg, { backgroundColor: '#E3F2FD' }]}>
+                <MaterialCommunityIcons name="calendar-edit" size={26} color="#2196F3" />
+              </View>
+              <View style={styles.createTextWrap}>
+                <Text style={styles.createOptionTitle}>New Class</Text>
+                <Text style={styles.createOptionSub}>Add a course to your schedule</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#CFD8DC" />
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Floating Add Button */}
       <Pressable
         style={({ pressed }) => [
           styles.fab,
           pressed && styles.pressedFab,
-          showFabMenu && styles.fabActive,
         ]}
-        onPress={() => setShowFabMenu(!showFabMenu)}
+        onPress={() => setShowCreateModal(true)}
       >
-        <Ionicons name={showFabMenu ? "close" : "add"} size={28} color="#fff" />
+        <Ionicons name="add" size={32} color="#fff" />
       </Pressable>
     </View>
   );
@@ -497,10 +485,6 @@ const Home = () => {
 export default Home;
 
 /* ---------- Small Components ---------- */
-
-function Dot({ color }: { color: string }) {
-  return <View style={[styles.dot, { backgroundColor: color }]} />;
-}
 
 function PriorityRow({
   color,
@@ -680,7 +664,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   priorityLeft: { flexDirection: "row", alignItems: "center", gap: 10 },
-  dot: { width: 8, height: 8, borderRadius: 99 },
   priorityDot: { width: 8, height: 8, borderRadius: 99 },
   priorityText: { color: "#2D5A5A", fontSize: 13.5, fontWeight: "500" },
   priorityCountBadge: {
@@ -788,7 +771,6 @@ const styles = StyleSheet.create({
     color: "#A0BFBF",
     fontSize: 12,
   },
-  emptyText: { color: Colors.mutedText, fontSize: 13 },
 
   /* Schedule items */
   scheduleItem: {
@@ -867,50 +849,6 @@ const styles = StyleSheet.create({
   },
 
   /* FAB */
-  fabOverlay: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: "rgba(0, 0, 0, 0.35)",
-  },
-  fabMenu: {
-    position: "absolute",
-    right: 20,
-    bottom: 92,
-    alignItems: "flex-end",
-    gap: 14,
-  },
-  fabMenuItem: { flexDirection: "row", alignItems: "center", gap: 10 },
-  fabLabelPill: {
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 16,
-    paddingVertical: 9,
-    borderRadius: 12,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 4,
-  },
-  fabMenuText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: Colors.title,
-  },
-  fabMenuIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: "#000",
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 4,
-  },
   fab: {
     position: "absolute",
     right: 20,
@@ -927,24 +865,66 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 6,
   },
-  fabActive: {
-    backgroundColor: Colors.secondary,
-    transform: [{ rotate: "45deg" }],
-  },
   pressed: { opacity: 0.85 },
   pressedFab: { transform: [{ scale: 0.96 }], opacity: 0.9 },
 
-  // Test Button Style (preserved)
-  testButton: {
-    marginTop: 20,
-    backgroundColor: "#FF6B6B",
-    padding: 16,
-    borderRadius: 16,
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 4,
+  /* New Modal Styles */
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
   },
-  testButtonText: { color: "white", fontWeight: "bold", fontSize: 16 },
+  createModalContainer: {
+    backgroundColor: 'white',
+    borderRadius: 28,
+    padding: 24,
+    width: '100%',
+    maxWidth: 340,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  createModalTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#111',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  createOptionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    padding: 16,
+    borderRadius: 20,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
+  },
+  createIconBg: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 16,
+  },
+  createTextWrap: {
+    flex: 1,
+  },
+  createOptionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 2,
+  },
+  createOptionSub: {
+    fontSize: 12,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
 });
