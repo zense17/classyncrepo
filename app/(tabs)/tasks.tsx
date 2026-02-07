@@ -1,224 +1,500 @@
-import React, { useState, useMemo } from 'react';
-import { View, StyleSheet, FlatList, TouchableOpacity, ScrollView } from 'react-native';
-import { Text } from 'react-native-paper';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { MaterialCommunityIcons, Ionicons, Feather } from '@expo/vector-icons';
+import { Colors } from "@/constants/colors";
+import { useAuth } from "@/lib/auth-context";
+import {
+  formatEstimatedTime,
+  getPriorityScore,
+  getPriorityStyles,
+  Priority,
+} from "@/lib/taskPriority";
+import {
+  completeTask,
+  deleteTask,
+  getPendingTasksSorted,
+  getTasksByStatus,
+  getTaskStats,
+  recalculateAllPriorities,
+  reopenTask,
+  Task,
+} from "@/lib/taskService";
+import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import dayjs from "dayjs";
+import relativeTime from "dayjs/plugin/relativeTime";
+import { useFocusEffect, useRouter } from "expo-router";
+import React, { useCallback, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Modal,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { Surface, Text } from "react-native-paper";
+import { SafeAreaView } from "react-native-safe-area-context";
 
-// --- CONFIGURATION ---
+dayjs.extend(relativeTime);
 
-// 1. Priority Scoring for Sorting (Higher number = Higher priority)
-const PRIORITY_SCORE = {
-  'Critical': 4,
-  'High': 3,
-  'Medium': 2,
-  'Low': 1
-};
-
-// 2. Dummy Data (Expanded to show all colors)
-const TASKS = [
-  {
-    id: '0',
-    title: 'Thesis Final Defense',
-    priority: 'Critical', // Red
-    time: '2 hours',
-    dueDate: 'Tomorrow',
-    course: 'THESIS 2',
-    difficulty: 'hard',
-  },
-  {
-    id: '1',
-    title: 'CS 101 - Programming Assignment',
-    priority: 'High', // Light Red
-    time: '3 hours',
-    dueDate: 'Nov 24, 2025',
-    course: 'CS 101',
-    difficulty: 'hard',
-  },
-  {
-    id: '2',
-    title: 'MATH 21 - Problem Set 5',
-    priority: 'High', // Light Red
-    time: '3 hours',
-    dueDate: 'Nov 24, 2025',
-    course: 'MATH 21',
-    difficulty: 'hard',
-  },
-  {
-    id: '3',
-    title: 'GEC 16 - Artists and Artisans',
-    priority: 'Medium', // Yellow
-    time: '1 hour',
-    dueDate: 'Nov 27, 2025',
-    course: 'GEC 16',
-    difficulty: 'medium',
-  },
-  {
-    id: '4',
-    title: 'PE 101 - Weekly Reflection',
-    priority: 'Low', // Green
-    time: '30 mins',
-    dueDate: 'Nov 28, 2025',
-    course: 'PE 101',
-    difficulty: 'easy',
-  },
-];
-
-const FILTERS = ['All Tasks', 'Critical', 'High', 'Medium', 'Low'];
+const FILTERS = ["All Tasks", "Critical", "High", "Medium", "Low", "Completed"];
 
 export default function SmartTasksScreen() {
   const router = useRouter();
-  const [activeFilter, setActiveFilter] = useState('All Tasks');
+  const { user } = useAuth();
 
-  // --- LOGIC ---
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [completedTasks, setCompletedTasks] = useState<Task[]>([]);
+  const [activeFilter, setActiveFilter] = useState("All Tasks");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [stats, setStats] = useState<any>(null);
 
-  // 1. Helper to get colors based on priority
-  const getPriorityStyles = (priority) => {
-    switch (priority) {
-      case 'Critical': // Red
-        return {
-          cardBg: '#FFEBEE', // Very light red background
-          accent: '#D32F2F', // Strong red dot
-          tagBg: '#FFCDD2',  // Light red tag
-          tagText: '#B71C1C' // Dark red text
-        };
-      case 'High': // Light Red (Salmon/Pinkish)
-        return {
-          cardBg: '#FFF2F2', // Extremely light red/pink
-          accent: '#EF5350', // Softer red dot
-          tagBg: '#FFEBEE',
-          tagText: '#C62828'
-        };
-      case 'Medium': // Yellow
-        return {
-          cardBg: '#FFFDE7', // Light yellow background
-          accent: '#FBC02D', // Strong yellow/orange dot
-          tagBg: '#FFF9C4',
-          tagText: '#F57F17'
-        };
-      case 'Low': // Green
-        return {
-          cardBg: '#E8F5E9', // Light green background
-          accent: '#43A047', // Green dot
-          tagBg: '#C8E6C9',
-          tagText: '#1B5E20'
-        };
-      default:
-        return {
-          cardBg: '#FFFFFF',
-          accent: '#9E9E9E',
-          tagBg: '#F5F5F5',
-          tagText: '#616161'
-        };
+  // Modal State
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const [taskToDelete, setTaskToDelete] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadTasks();
+    }, [user]),
+  );
+
+  const loadTasks = async (showRefresh = false) => {
+    if (!user) {
+      setIsLoading(false);
+      return;
+    }
+
+    if (showRefresh) setIsRefreshing(true);
+
+    try {
+      await recalculateAllPriorities(user.$id);
+      const fetchedTasks = await getPendingTasksSorted(user.$id);
+      setTasks(fetchedTasks);
+
+      const fetchedCompleted = await getTasksByStatus(user.$id, "completed");
+      setCompletedTasks(fetchedCompleted);
+
+      const taskStats = await getTaskStats(user.$id);
+      setStats(taskStats);
+    } catch (error) {
+      console.error("Failed to load tasks:", error);
+      Alert.alert("Error", "Failed to load tasks");
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
     }
   };
 
-  // 2. Sorting & Filtering
-  // useMemo ensures we only re-sort/re-filter when data or filter changes
+  const onRefresh = () => loadTasks(true);
+
+  const handleCompleteTask = async (taskId: string) => {
+    try {
+      await completeTask(taskId);
+      loadTasks();
+    } catch (error) {
+      console.error("Failed to complete task:", error);
+      Alert.alert("Error", "Failed to complete task");
+    }
+  };
+
+  const handleReopenTask = async (taskId: string) => {
+    try {
+      await reopenTask(taskId);
+      loadTasks();
+    } catch (error) {
+      console.error("Failed to reopen task:", error);
+      Alert.alert("Error", "Failed to reopen task");
+    }
+  };
+
+  const confirmDeleteTask = async () => {
+    if (!taskToDelete) return;
+    try {
+      await deleteTask(taskToDelete.id);
+      setDeleteModalVisible(false);
+      setTaskToDelete(null);
+      loadTasks();
+    } catch (error) {
+      Alert.alert("Error", "Failed to delete task");
+    }
+  };
+
+  // UPDATED: Now includes time in the formatted string
+  const formatDueDate = (
+    dueDate: string,
+  ): { text: string; isOverdue: boolean; isToday: boolean } => {
+    const due = dayjs(dueDate);
+    const today = dayjs().startOf("day");
+    const diffDays = due.diff(today, "day");
+    const timeStr = due.format("h:mm A"); // e.g., "11:59 PM"
+
+    if (diffDays < 0) {
+      return {
+        text: `Overdue (${Math.abs(diffDays)}d ago)`,
+        isOverdue: true,
+        isToday: false,
+      };
+    } else if (diffDays === 0) {
+      return { text: `Today, ${timeStr}`, isOverdue: false, isToday: true };
+    } else if (diffDays === 1) {
+      return { text: `Tomorrow, ${timeStr}`, isOverdue: false, isToday: false };
+    } else if (diffDays <= 7) {
+      return {
+        text: due.format(`dddd, ${timeStr}`),
+        isOverdue: false,
+        isToday: false,
+      };
+    } else {
+      return {
+        text: due.format(`MMM D, ${timeStr}`),
+        isOverdue: false,
+        isToday: false,
+      };
+    }
+  };
+
+  const formatCompletedDate = (completedAt: string | undefined): string => {
+    if (!completedAt) return "";
+    const completed = dayjs(completedAt);
+    const today = dayjs().startOf("day");
+    const diffDays = today.diff(completed.startOf("day"), "day");
+
+    if (diffDays === 0) {
+      return "Completed today";
+    } else if (diffDays === 1) {
+      return "Completed yesterday";
+    } else if (diffDays <= 7) {
+      return `Completed ${diffDays} days ago`;
+    } else {
+      return `Completed ${completed.format("MMM D")}`;
+    }
+  };
+
   const processedTasks = useMemo(() => {
-    // A. Filter first
-    let filtered = TASKS;
-    if (activeFilter !== 'All Tasks') {
-      filtered = TASKS.filter(t => t.priority === activeFilter);
+    if (activeFilter === "Completed") {
+      return [...completedTasks].sort((a, b) => {
+        const dateA = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+        const dateB = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+        return dateB - dateA;
+      });
     }
 
-    // B. Sort based on PRIORITY_SCORE (Critical -> Low)
+    let filtered = tasks;
+    if (activeFilter !== "All Tasks") {
+      filtered = tasks.filter((t) => t.priority === activeFilter);
+    }
+
     return [...filtered].sort((a, b) => {
-      const scoreA = PRIORITY_SCORE[a.priority] || 0;
-      const scoreB = PRIORITY_SCORE[b.priority] || 0;
-      return scoreB - scoreA; // Descending
+      const scoreA = getPriorityScore(a.priority as Priority);
+      const scoreB = getPriorityScore(b.priority as Priority);
+
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
     });
-  }, [activeFilter]);
+  }, [tasks, completedTasks, activeFilter]);
 
-
-  // --- RENDER ---
-
-  const renderTaskCard = ({ item }) => {
-    const stylesConfig = getPriorityStyles(item.priority);
+  const renderTaskCard = ({ item }: { item: Task }) => {
+    const stylesConfig = getPriorityStyles(item.priority as Priority);
+    const dueDateInfo = formatDueDate(item.dueDate);
+    const isCompleted = item.status === "completed";
 
     return (
-      <View style={[styles.card, { backgroundColor: stylesConfig.cardBg }]}>
-        {/* Top Row: Priority Badge + Edit Button */}
+      <View
+        style={[
+          styles.card,
+          { backgroundColor: isCompleted ? "#F5F5F5" : stylesConfig.cardBg },
+          isCompleted && styles.completedCard,
+        ]}
+      >
         <View style={styles.cardHeader}>
           <View style={styles.priorityBadge}>
-            <View style={[styles.dot, { backgroundColor: stylesConfig.accent, shadowColor: stylesConfig.accent, shadowOpacity: 0.3, shadowRadius: 4 }]} />
-            <Text style={styles.priorityText}>{item.priority.toUpperCase()} PRIORITY</Text>
+            <View
+              style={[
+                styles.dot,
+                {
+                  backgroundColor: isCompleted
+                    ? "#9E9E9E"
+                    : stylesConfig.accent,
+                },
+              ]}
+            />
+            <Text
+              style={[styles.priorityText, isCompleted && styles.completedText]}
+            >
+              {isCompleted
+                ? "COMPLETED"
+                : `${item.priority.toUpperCase()} PRIORITY`}
+            </Text>
+            {item.isMajorSubject && !isCompleted && (
+              <View style={styles.majorBadge}>
+                <Text style={styles.majorBadgeText}>⭐</Text>
+              </View>
+            )}
           </View>
-          
-          <TouchableOpacity style={styles.editButton}>
-            <Feather name="edit-2" size={14} color="white" />
-            <Text style={styles.editButtonText}>Edit</Text>
+
+          <TouchableOpacity
+            style={[
+              styles.deleteButton,
+              isCompleted && styles.deleteButtonCompleted,
+            ]}
+            onPress={() => {
+              setTaskToDelete({ id: item.$id!, title: item.title });
+              setDeleteModalVisible(true);
+            }}
+          >
+            <Feather name="trash-2" size={14} color="white" />
           </TouchableOpacity>
         </View>
 
-        {/* Task Title */}
-        <Text style={styles.taskTitle}>{item.title}</Text>
+        <Text
+          style={[styles.taskTitle, isCompleted && styles.completedTaskTitle]}
+        >
+          {item.title}
+        </Text>
 
-        {/* Metadata Row (Time & Date) */}
         <View style={styles.metaRow}>
           <View style={styles.metaItem}>
-            <MaterialCommunityIcons name="clock-outline" size={16} color="#666" />
-            <Text style={styles.metaText}>{item.time}</Text>
+            <MaterialCommunityIcons
+              name="clock-outline"
+              size={16}
+              color={isCompleted ? "#9E9E9E" : "#666"}
+            />
+            <Text
+              style={[styles.metaText, isCompleted && styles.completedMetaText]}
+            >
+              {formatEstimatedTime(item.estimatedMinutes)}
+            </Text>
           </View>
           <View style={styles.metaItem}>
-            <MaterialCommunityIcons name="calendar-blank-outline" size={16} color="#666" />
-            <Text style={styles.metaText}>{item.dueDate}</Text>
+            <MaterialCommunityIcons
+              name={
+                isCompleted ? "check-circle-outline" : "calendar-blank-outline"
+              }
+              size={16}
+              color={
+                isCompleted
+                  ? "#4CAF50"
+                  : dueDateInfo.isOverdue
+                    ? "#D32F2F"
+                    : dueDateInfo.isToday
+                      ? "#FF9800"
+                      : "#666"
+              }
+            />
+            <Text
+              style={[
+                styles.metaText,
+                isCompleted && styles.completedDateText,
+                !isCompleted && dueDateInfo.isOverdue && styles.overdueText,
+                !isCompleted && dueDateInfo.isToday && styles.todayText,
+              ]}
+            >
+              {isCompleted
+                ? formatCompletedDate(item.completedAt)
+                : dueDateInfo.text}
+            </Text>
           </View>
         </View>
 
-        {/* Separator Line */}
         <View style={styles.separator} />
 
-        {/* Bottom Row: Tags & Check Button */}
         <View style={styles.cardFooter}>
           <View style={styles.tagsContainer}>
-            {/* Course Tag */}
-            <View style={styles.courseTag}>
-              <Text style={styles.courseTagText}>{item.course}</Text>
+            <View
+              style={[styles.courseTag, isCompleted && styles.completedTag]}
+            >
+              <Text
+                style={[
+                  styles.courseTagText,
+                  isCompleted && styles.completedTagText,
+                ]}
+              >
+                {item.courseCode}
+              </Text>
             </View>
-            {/* Difficulty Tag */}
-            <View style={[styles.difficultyTag, { backgroundColor: stylesConfig.tagBg, shadowColor: stylesConfig.tagText, shadowOpacity: 0.2, shadowRadius: 2 }]}>
-              <Text style={[styles.difficultyText, { color: stylesConfig.tagText }]}>
+            <View
+              style={[
+                styles.typeTag,
+                {
+                  backgroundColor: isCompleted ? "#E0E0E0" : stylesConfig.tagBg,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.typeText,
+                  { color: isCompleted ? "#757575" : stylesConfig.tagText },
+                ]}
+              >
+                {item.taskType}
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.difficultyTag,
+                {
+                  backgroundColor: isCompleted
+                    ? "#E0E0E0"
+                    : item.difficulty === "hard"
+                      ? "#FFEBEE"
+                      : item.difficulty === "medium"
+                        ? "#FFF8E1"
+                        : "#E8F5E9",
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.difficultyText,
+                  {
+                    color: isCompleted
+                      ? "#757575"
+                      : item.difficulty === "hard"
+                        ? "#C62828"
+                        : item.difficulty === "medium"
+                          ? "#F57F17"
+                          : "#2E7D32",
+                  },
+                ]}
+              >
                 {item.difficulty}
               </Text>
             </View>
           </View>
 
-          <TouchableOpacity style={styles.checkButton}>
-            <MaterialCommunityIcons name="check" size={22} color="white" />
-          </TouchableOpacity>
+          {isCompleted ? (
+            <TouchableOpacity
+              style={styles.reopenButton}
+              onPress={() => handleReopenTask(item.$id!)}
+            >
+              <MaterialCommunityIcons name="refresh" size={20} color="#666" />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.checkButton}
+              onPress={() => handleCompleteTask(item.$id!)}
+            >
+              <MaterialCommunityIcons name="check" size={22} color="white" />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     );
   };
 
+  const renderEmptyState = () => (
+    <View style={styles.emptyState}>
+      <MaterialCommunityIcons
+        name={
+          activeFilter === "Completed"
+            ? "checkbox-marked-circle-outline"
+            : "checkbox-blank-circle-outline"
+        }
+        size={64}
+        color="#B0BEC5"
+      />
+      <Text style={styles.emptyTitle}>
+        {activeFilter === "Completed"
+          ? "No Completed Tasks"
+          : activeFilter === "All Tasks"
+            ? "No Tasks Yet"
+            : `No ${activeFilter} Priority Tasks`}
+      </Text>
+      <Text style={styles.emptySubtitle}>
+        {activeFilter === "Completed"
+          ? "Tasks you complete will appear here"
+          : activeFilter === "All Tasks"
+            ? "Tap the + button to add your first task"
+            : "Great job! No tasks with this priority level"}
+      </Text>
+      {activeFilter === "All Tasks" && (
+        <TouchableOpacity
+          style={styles.emptyButton}
+          onPress={() => router.push("/(tasks)/addTask")}
+        >
+          <Ionicons name="add" size={20} color="white" />
+          <Text style={styles.emptyButtonText}>Add Task</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#26A69A" />
+          <Text style={styles.loadingText}>Loading tasks...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
-      
-      {/* 1. Header Section */}
+      {/* Header Section */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-           <Ionicons name="arrow-back" size={22} color="white" />
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={24} color={Colors.title} />
         </TouchableOpacity>
-        <View>
-            <Text style={styles.headerTitle}>Smart Tasks</Text>
-            <Text style={styles.headerSubtitle}>AI-powered priority ranking</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle}>Smart Tasks</Text>
+          <Text style={styles.headerSubtitle}>AI-powered priority ranking</Text>
         </View>
+        <TouchableOpacity
+          style={styles.addButton}
+          onPress={() => router.push("/(tasks)/addTask")}
+        >
+          <Ionicons name="add" size={24} color="white" />
+        </TouchableOpacity>
       </View>
 
-      {/* 2. Horizontal Filter Tabs */}
+      {/* Horizontal Filter Tabs */}
       <View style={styles.filterContainer}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScroll}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterScroll}
+        >
           {FILTERS.map((filter) => {
             const isActive = activeFilter === filter;
+            const isCompletedFilter = filter === "Completed";
             return (
-              <TouchableOpacity 
-                key={filter} 
-                style={[styles.filterPill, isActive && styles.activeFilterPill]}
+              <TouchableOpacity
+                key={filter}
+                style={[
+                  styles.filterPill,
+                  isActive && styles.activeFilterPill,
+                  isCompletedFilter && !isActive && styles.completedFilterPill,
+                  isCompletedFilter &&
+                    isActive &&
+                    styles.activeCompletedFilterPill,
+                ]}
                 onPress={() => setActiveFilter(filter)}
               >
-                <Text style={[styles.filterText, isActive && styles.activeFilterText]}>
-                    {filter}
+                {isCompletedFilter && (
+                  <MaterialCommunityIcons
+                    name="check-circle"
+                    size={14}
+                    color={isActive ? "#FFFFFF" : "#666"}
+                    style={{ marginRight: 4 }}
+                  />
+                )}
+                <Text
+                  style={[
+                    styles.filterText,
+                    isActive && styles.activeFilterText,
+                    isCompletedFilter &&
+                      !isActive &&
+                      styles.completedFilterText,
+                  ]}
+                >
+                  {filter}
                 </Text>
               </TouchableOpacity>
             );
@@ -226,211 +502,191 @@ export default function SmartTasksScreen() {
         </ScrollView>
       </View>
 
-      {/* 3. Task List */}
+      {/* Task List */}
       <FlatList
         data={processedTasks}
         renderItem={renderTaskCard}
-        keyExtractor={item => item.id}
-        contentContainerStyle={styles.listContent}
+        keyExtractor={(item) => item.$id!}
+        contentContainerStyle={[
+          styles.listContent,
+          processedTasks.length === 0 && styles.emptyListContent,
+        ]}
         showsVerticalScrollIndicator={false}
+        ListEmptyComponent={renderEmptyState}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={onRefresh}
+            colors={["#26A69A"]}
+            tintColor="#26A69A"
+          />
+        }
       />
 
+      {/* REDESIGNED DELETE MODAL */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={deleteModalVisible}
+        onRequestClose={() => setDeleteModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Surface style={styles.modalContainer} elevation={5}>
+            <View style={styles.modalIconBg}>
+              <Feather name="trash-2" size={28} color="#EF5350" />
+            </View>
+
+            <Text style={styles.modalTitle}>Delete Task?</Text>
+            <Text style={styles.modalSubtitle}>
+              Are you sure you want to delete &quot;{taskToDelete?.title}&quot;?
+              This action cannot be undone.
+            </Text>
+
+            <View style={styles.modalActionRow}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={() => setDeleteModalVisible(false)}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.modalDeleteBtn}
+                onPress={confirmDeleteTask}
+              >
+                <Text style={styles.modalDeleteText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </Surface>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#E0F7FA', // Light Cyan background
-  },
-  /* Header */
+  container: { flex: 1, backgroundColor: "#E0F7FA" },
+  loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
+  loadingText: { marginTop: 12, color: "#666" },
+
   header: {
     paddingHorizontal: 18,
     paddingTop: 10,
     paddingBottom: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 12,
-    backgroundColor: 'linear-gradient(135deg, #4DB6AC 0%, #26A69A 100%)', // Gradient for depth
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.1,
-    shadowRadius: 5,
-    elevation: 4,
   },
-  backButton: {
-    backgroundColor: '#4DB6AC',
+  backBtn: {
+    padding: 4,
+  },
+  addButton: {
+    backgroundColor: "#26A69A",
     borderRadius: 50,
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#26A69A',
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.2,
     shadowRadius: 3,
     elevation: 3,
   },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#000',
-  },
-  headerSubtitle: {
-    fontSize: 13,
-    color: '#666',
-    marginTop: 1,
-  },
+  headerTitle: { fontSize: 22, fontWeight: "bold", color: "#000" },
+  headerSubtitle: { fontSize: 13, color: "#666", marginTop: 1 },
 
-  /* Filters */
-  filterContainer: {
-    height: 48,
-    marginBottom: 12,
-  },
-  filterScroll: {
-    paddingHorizontal: 18,
-    gap: 10,
-  },
+  filterContainer: { height: 48, marginBottom: 12 },
+  filterScroll: { paddingHorizontal: 18, gap: 10 },
   filterPill: {
-    backgroundColor: '#B2DFDB', // Inactive light teal
+    backgroundColor: "#B2DFDB",
     paddingVertical: 8,
     paddingHorizontal: 18,
     borderRadius: 18,
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    justifyContent: "center",
+    flexDirection: "row",
+    alignItems: "center",
   },
-  activeFilterPill: {
-    backgroundColor: '#26A69A', // Active darker teal
-    shadowOpacity: 0.2,
-    elevation: 3,
-  },
-  filterText: {
-    color: '#004D40',
-    fontWeight: '600',
-    fontSize: 13,
-  },
-  activeFilterText: {
-    color: '#FFFFFF',
-  },
+  activeFilterPill: { backgroundColor: "#26A69A" },
+  completedFilterPill: { backgroundColor: "#E0E0E0" },
+  activeCompletedFilterPill: { backgroundColor: "#757575" },
+  filterText: { color: "#004D40", fontWeight: "600", fontSize: 13 },
+  activeFilterText: { color: "#FFFFFF" },
+  completedFilterText: { color: "#666" },
 
-  /* List */
-  listContent: {
-    paddingHorizontal: 18,
-    paddingBottom: 80, // Space for bottom nav
-  },
+  listContent: { paddingHorizontal: 18, paddingBottom: 100 },
+  emptyListContent: { flexGrow: 1 },
 
-  /* Card Styles */
   card: {
     borderRadius: 20,
     padding: 16,
     marginBottom: 12,
-    // Enhanced shadow for depth
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.1,
     shadowRadius: 6,
     elevation: 3,
     borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.05)',
+    borderColor: "rgba(0,0,0,0.05)",
   },
+  completedCard: { opacity: 0.85 },
   cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     marginBottom: 10,
   },
-  priorityBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
+  priorityBadge: { flexDirection: "row", alignItems: "center", gap: 6 },
+  dot: { width: 10, height: 10, borderRadius: 5 },
   priorityText: {
     fontSize: 11,
-    color: '#888',
-    fontWeight: '600',
+    color: "#888",
+    fontWeight: "600",
     letterSpacing: 0.5,
   },
-  editButton: {
-    backgroundColor: '#26A69A',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 14,
-    gap: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  editButtonText: {
-    color: 'white',
-    fontSize: 11,
-    fontWeight: '600',
-  },
+  completedText: { color: "#9E9E9E" },
+  majorBadge: { marginLeft: 4 },
+  majorBadgeText: { fontSize: 10 },
+  deleteButton: { backgroundColor: "#EF5350", padding: 8, borderRadius: 12 },
+  deleteButtonCompleted: { backgroundColor: "#BDBDBD" },
   taskTitle: {
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#111',
+    fontWeight: "bold",
+    color: "#111",
     marginBottom: 10,
   },
-  metaRow: {
-    flexDirection: 'row',
-    gap: 14,
-    marginBottom: 14,
-  },
-  metaItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  metaText: {
-    color: '#666',
-    fontSize: 13,
-  },
+  completedTaskTitle: { color: "#757575", textDecorationLine: "line-through" },
+  metaRow: { flexDirection: "row", gap: 14, marginBottom: 14 },
+  metaItem: { flexDirection: "row", alignItems: "center", gap: 4 },
+  metaText: { color: "#666", fontSize: 13 },
+  completedMetaText: { color: "#9E9E9E" },
+  completedDateText: { color: "#4CAF50", fontWeight: "600" },
+  overdueText: { color: "#D32F2F", fontWeight: "600" },
+  todayText: { color: "#FF9800", fontWeight: "600" },
   separator: {
     height: 1,
-    backgroundColor: 'rgba(0,0,0,0.1)',
+    backgroundColor: "rgba(0,0,0,0.1)",
     marginBottom: 12,
   },
   cardFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
   },
-  tagsContainer: {
-    flexDirection: 'row',
-    gap: 8,
-  },
+  tagsContainer: { flexDirection: "row", gap: 8, flexWrap: "wrap", flex: 1 },
   courseTag: {
-    backgroundColor: 'white',
+    backgroundColor: "white",
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 1,
+    borderColor: "#E0E0E0",
   },
-  courseTagText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#444',
-  },
+  completedTag: { backgroundColor: "#EEEEEE", borderColor: "#BDBDBD" },
+  courseTagText: { fontSize: 11, fontWeight: "600", color: "#444" },
+  completedTagText: { color: "#757575" },
+  typeTag: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 10 },
+  typeText: { fontSize: 11, fontWeight: "bold", textTransform: "capitalize" },
   difficultyTag: {
     paddingVertical: 6,
     paddingHorizontal: 10,
@@ -438,19 +694,128 @@ const styles = StyleSheet.create({
   },
   difficultyText: {
     fontSize: 11,
-    fontWeight: 'bold',
+    fontWeight: "bold",
+    textTransform: "capitalize",
   },
   checkButton: {
-    backgroundColor: '#2ECC71', // Green
+    backgroundColor: "#2ECC71",
     width: 42,
     height: 42,
     borderRadius: 21,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 3,
+  },
+  reopenButton: {
+    backgroundColor: "#E0E0E0",
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#BDBDBD",
+  },
+
+  emptyState: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 40,
+    paddingVertical: 60,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#333",
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: "#666",
+    textAlign: "center",
+    marginBottom: 24,
+  },
+  emptyButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#26A69A",
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 24,
+  },
+  emptyButtonText: { color: "white", fontSize: 15, fontWeight: "600" },
+
+  // Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  modalContainer: {
+    backgroundColor: "white",
+    borderRadius: 28,
+    padding: 24,
+    width: "100%",
+    alignItems: "center",
+  },
+  modalIconBg: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: "#FFEBEE",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#111",
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    fontSize: 15,
+    color: "#666",
+    textAlign: "center",
+    lineHeight: 22,
+    marginBottom: 24,
+  },
+  modalActionRow: {
+    flexDirection: "row",
+    gap: 12,
+    width: "100%",
+  },
+  modalCancelBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 16,
+    backgroundColor: "#F5F5F5",
+    alignItems: "center",
+  },
+  modalCancelText: {
+    color: "#666",
+    fontWeight: "700",
+    fontSize: 15,
+  },
+  modalDeleteBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 16,
+    backgroundColor: "#EF5350",
+    alignItems: "center",
+  },
+  modalDeleteText: {
+    color: "white",
+    fontWeight: "700",
+    fontSize: 15,
   },
 });
