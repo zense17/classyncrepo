@@ -20,7 +20,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.zense17.classync1",
+      "package": "com.classync.app",
     },
     "web": {
       "output": "static",
